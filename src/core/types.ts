@@ -1,6 +1,11 @@
 export type NodeType = 'rest' | 'research' | 'server' | 'hub'
 export type RoadPort = 'road' | 'north' | 'east' | 'south' | 'west'
 
+export interface Point {
+  x: number
+  y: number
+}
+
 export interface WorkSlot {
   id: string
   catId: string | null
@@ -14,13 +19,27 @@ export interface TravelLeg {
   toNodeId: string
 }
 
-export interface CatTravel {
+interface CatTravelBase {
   targetNodeId: string
   targetSlotId: string
   sourceNodeId: string
+}
+
+export interface RoadTravel extends CatTravelBase {
+  kind: 'road'
   leg: TravelLeg
   legProgress: number
 }
+
+export interface FlightTravel extends CatTravelBase {
+  kind: 'flight'
+  fromNodeId: string
+  fromSlotId: string | null
+  flightDurationSeconds: number
+  flightProgress: number
+}
+
+export type CatTravel = RoadTravel | FlightTravel
 
 export interface StrandedTravel {
   targetNodeId: string
@@ -45,6 +64,7 @@ export interface SimNode {
   type: NodeType
   name: string
   blocked?: boolean
+  position?: Point
   slots: WorkSlot[]
   scienceBuffer: number
   scienceReceived: number
@@ -73,6 +93,7 @@ export interface SimulationSnapshot {
   cats: Cat[]
   connections: Connection[]
   workerLinks: WorkerLink[]
+  flightUnlocked: boolean
 }
 
 export type CommandResult<T = void> =

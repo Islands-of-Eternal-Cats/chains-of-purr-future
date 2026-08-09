@@ -1,4 +1,4 @@
-import type { Cat, CommandResult, Connection, NodeType, RoadPort, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'
+import type { Cat, CommandResult, Connection, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'
 
 const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
@@ -7,17 +7,24 @@ const EPSILON = 0.000001
 const MAX_VIGOR = 100
 const WORK_VIGOR_DRAIN_PER_SECOND = 10
 const REST_VIGOR_RECOVERY_PER_SECOND = 20
+const FLIGHT_UNLOCK_DATA = 50
+const ROAD_SPEED_PIXELS_PER_SECOND = 250
+const MIN_ROAD_TRAVEL_SECONDS = 0.6
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
   return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
 }
 
 function copyNode(node: SimNode): SimNode {
-  return { ...node, slots: node.slots.map((slot) => ({ ...slot })) }
+  return { ...node, position: { ...(node.position ?? { x: 0, y: 0 }) }, slots: node.slots.map((slot) => ({ ...slot })) }
 }
 
 function copyCat(cat: Cat): Cat {
-  return { ...cat, travel: cat.travel ? { ...cat.travel, leg: { ...cat.travel.leg } } : null, stranded: cat.stranded ? { ...cat.stranded } : null }
+  return {
+    ...cat,
+    travel: cat.travel ? cat.travel.kind === 'road' ? { ...cat.travel, leg: { ...cat.travel.leg } } : { ...cat.travel } : null,
+    stranded: cat.stranded ? { ...cat.stranded } : null,
+  }
 }
 
 function roadPorts(type: NodeType): RoadPort[] {
@@ -31,11 +38,13 @@ export class Simulation {
   private readonly workerLinks = new Map<string, WorkerLink>()
   private nodeCounter = 0
   private catCounter = 0
+  private flightUnlocked = false
 
   constructor() {
     this.nodes.set(REST_ID, {
       id: REST_ID, type: 'rest', name: 'Комната отдыха', slots: slots(REST_ID, 3),
       blocked: false,
+      position: { x: 80, y: 270 },
       scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
     })
     this.addCat(MAX_VIGOR)
@@ -47,6 +56,7 @@ export class Simulation {
       cats: [...this.cats.values()].map(copyCat),
       connections: [...this.connections.values()].map((connection) => ({ ...connection })),
       workerLinks: [...this.workerLinks.values()].map((link) => ({ ...link })),
+      flightUnlocked: this.flightUnlocked,
     }
   }
 
@@ -61,6 +71,7 @@ export class Simulation {
       type,
       name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : type === 'server' ? 'Сервер данных' : 'Дорожный хаб',
       blocked: false,
+      position: { x: 0, y: 0 },
       slots: slots(id, type === 'rest' ? 3 : type === 'research' ? 2 : type === 'server' ? 1 : 0),
       scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
     }
@@ -78,9 +89,11 @@ export class Simulation {
     const catUsingNode = [...this.cats.values()].find((cat) =>
       cat.nodeId === nodeId
       || cat.travel?.targetNodeId === nodeId
-      || cat.travel?.leg.fromNodeId === nodeId
-      || cat.travel?.leg.toNodeId === nodeId
-      || (cat.travel ? linkedWorkerIds.has(cat.travel.leg.linkId) : false)
+      || (cat.travel?.kind === 'road' && (
+        cat.travel.leg.fromNodeId === nodeId
+        || cat.travel.leg.toNodeId === nodeId
+        || linkedWorkerIds.has(cat.travel.leg.linkId)
+      ))
       || cat.stranded?.targetNodeId === nodeId,
     )
     if (catUsingNode) return { ok: false, reason: `${catUsingNode.name} находится в модуле или следует через него.` }
@@ -100,7 +113,7 @@ export class Simulation {
     return {
       ok: true,
       value: [...this.cats.values()]
-        .filter((cat) => cat.nodeId === hubId || (cat.status === 'travelling' && cat.travel && incidentIds.has(cat.travel.leg.linkId)))
+        .filter((cat) => cat.nodeId === hubId || (cat.status === 'travelling' && cat.travel?.kind === 'road' && incidentIds.has(cat.travel.leg.linkId)))
         .map((cat) => cat.id),
     }
   }
@@ -141,6 +154,14 @@ export class Simulation {
     const node = this.nodes.get(nodeId)
     if (!node) return { ok: false, reason: 'Модуль не найден.' }
     node.blocked = blocked
+    return { ok: true, value: undefined }
+  }
+
+  setNodePosition(nodeId: string, position: Point): CommandResult<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node) return { ok: false, reason: 'Модуль не найден.' }
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return { ok: false, reason: 'Координаты модуля должны быть конечными числами.' }
+    node.position = { ...position }
     return { ok: true, value: undefined }
   }
 
@@ -238,7 +259,7 @@ export class Simulation {
   disconnectWorkerLink(linkId: string): CommandResult<void> {
     if (!this.workerLinks.has(linkId)) return { ok: false, reason: 'Переход для котов не найден.' }
     for (const cat of this.cats.values()) {
-      if (cat.travel?.leg.linkId !== linkId) continue
+      if (cat.travel?.kind !== 'road' || cat.travel.leg.linkId !== linkId) continue
       const travel = cat.travel
       cat.nodeId = travel.leg.fromNodeId
       cat.slotId = null
@@ -308,13 +329,14 @@ export class Simulation {
         remainingCapacity -= transferred
       }
     }
+    this.unlockFlightIfReady()
     return { ok: true, value: undefined }
   }
 
   private startTravel(cat: Cat, targetNodeId: string, targetSlotId: string): CommandResult<void> {
     if (this.nodes.get(cat.nodeId)?.blocked || this.nodes.get(targetNodeId)?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
-    const path = this.findPath(cat.nodeId, targetNodeId)
-    if (!path?.length) return { ok: false, reason: 'Нет маршрута для кота. Создайте двунаправленные переходы.' }
+    const path = this.flightUnlocked ? null : this.findPath(cat.nodeId, targetNodeId)
+    if (!this.flightUnlocked && !path?.length) return { ok: false, reason: 'Нет маршрута для кота. Создайте двунаправленные переходы.' }
     const currentSlot = cat.slotId ? this.nodes.get(cat.nodeId)?.slots.find((slot) => slot.id === cat.slotId) : null
     const targetSlot = this.nodes.get(targetNodeId)?.slots.find((slot) => slot.id === targetSlotId)
     if (!targetSlot) return { ok: false, reason: 'Назначение кота повреждено.' }
@@ -323,12 +345,18 @@ export class Simulation {
     cat.slotId = null
     cat.status = 'travelling'
     cat.stranded = null
-    cat.travel = { targetNodeId, targetSlotId, sourceNodeId: cat.nodeId, leg: path[0], legProgress: 0 }
+    cat.travel = this.flightUnlocked
+      ? this.flightTravel(cat.nodeId, targetNodeId, targetSlotId, cat.nodeId, currentSlot?.id ?? null)
+      : { kind: 'road', targetNodeId, targetSlotId, sourceNodeId: cat.nodeId, leg: path![0], legProgress: 0 }
     return { ok: true, value: undefined }
   }
 
   private continueTravel(cat: Cat): boolean {
-    if (!cat.travel) return false
+    if (!cat.travel || cat.travel.kind !== 'road') return false
+    if (this.flightUnlocked) {
+      cat.travel = this.flightTravel(cat.nodeId, cat.travel.targetNodeId, cat.travel.targetSlotId, cat.travel.sourceNodeId, null)
+      return true
+    }
     const path = this.findPath(cat.nodeId, cat.travel.targetNodeId)
     if (!path?.length) {
       cat.status = 'stranded'
@@ -344,10 +372,16 @@ export class Simulation {
   private resumeStrandedCats() {
     for (const cat of this.cats.values()) {
       if (cat.status !== 'stranded' || !cat.stranded) continue
+      if (this.flightUnlocked) {
+        cat.status = 'travelling'
+        cat.travel = this.flightTravel(cat.nodeId, cat.stranded.targetNodeId, cat.stranded.targetSlotId, cat.stranded.sourceNodeId, null)
+        cat.stranded = null
+        continue
+      }
       const path = this.findPath(cat.nodeId, cat.stranded.targetNodeId)
       if (!path?.length) continue
       cat.status = 'travelling'
-      cat.travel = { ...cat.stranded, leg: path[0], legProgress: 0 }
+      cat.travel = { ...cat.stranded, kind: 'road', leg: path[0], legProgress: 0 }
       cat.stranded = null
     }
   }
@@ -441,10 +475,61 @@ export class Simulation {
     return null
   }
 
+  private flightTravel(fromNodeId: string, targetNodeId: string, targetSlotId: string, sourceNodeId: string, fromSlotId: string | null) {
+    return {
+      kind: 'flight' as const,
+      fromNodeId,
+      fromSlotId,
+      targetNodeId,
+      targetSlotId,
+      sourceNodeId,
+      flightDurationSeconds: this.flightDuration(fromNodeId, targetNodeId),
+      flightProgress: 0,
+    }
+  }
+
+  private flightDuration(fromNodeId: string, targetNodeId: string) {
+    const from = this.nodes.get(fromNodeId)?.position
+    const target = this.nodes.get(targetNodeId)?.position
+    if (!from || !target) return MIN_ROAD_TRAVEL_SECONDS / 2
+    return Math.max(MIN_ROAD_TRAVEL_SECONDS / 2, Math.hypot(target.x - from.x, target.y - from.y) / (ROAD_SPEED_PIXELS_PER_SECOND * 2))
+  }
+
+  private unlockFlightIfReady() {
+    if (this.flightUnlocked || [...this.nodes.values()].reduce((total, node) => total + node.scienceReceived, 0) < FLIGHT_UNLOCK_DATA) return
+    this.flightUnlocked = true
+    this.resumeStrandedCats()
+    this.returnRecoveredCatsToAssignedSlots()
+  }
+
   private advanceCat(cat: Cat, deltaSeconds: number): number {
     if (cat.status !== 'travelling' || !cat.travel || deltaSeconds <= 0) return cat.status === 'idle' ? deltaSeconds : 0
     let remainingTime = deltaSeconds
     while (cat.travel && remainingTime > EPSILON) {
+      if (cat.travel.kind === 'flight') {
+        const travel = cat.travel
+        if (this.nodes.get(travel.fromNodeId)?.blocked || this.nodes.get(travel.targetNodeId)?.blocked) {
+          cat.status = 'stranded'
+          cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+          cat.travel = null
+          return 0
+        }
+        const timeToFinish = travel.flightDurationSeconds * (1 - travel.flightProgress)
+        if (remainingTime + EPSILON < timeToFinish) {
+          travel.flightProgress += remainingTime / travel.flightDurationSeconds
+          return 0
+        }
+        remainingTime -= timeToFinish
+        cat.nodeId = travel.targetNodeId
+        const targetSlot = this.nodes.get(travel.targetNodeId)?.slots.find((slot) => slot.id === travel.targetSlotId)
+        if (!targetSlot || targetSlot.reservedByCatId !== cat.id) return 0
+        targetSlot.reservedByCatId = null
+        targetSlot.catId = cat.id
+        cat.slotId = targetSlot.id
+        cat.status = 'idle'
+        cat.travel = null
+        return remainingTime
+      }
       const leg = cat.travel.leg
       const link = this.workerLinks.get(leg.linkId)
       if (!link || this.nodes.get(leg.fromNodeId)?.blocked || this.nodes.get(leg.toNodeId)?.blocked) {

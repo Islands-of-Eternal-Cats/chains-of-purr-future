@@ -240,9 +240,9 @@ describe('Simulation rest seating', () => {
     simulation.connectWorkerNodes(destination.value.id, server.value.id, 1, 'east', 'road')
 
     expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id).ok).toBe(true)
-    expect(cat(simulation).travel?.leg.toNodeId).toBe(first.value.id)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { toNodeId: first.value.id } })
     simulation.tick(1)
-    expect(cat(simulation).travel?.leg.toNodeId).toBe(fast.value.id)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { toNodeId: fast.value.id } })
     simulation.tick(4)
     expect(node(simulation, 'server').slots[0].catId).toBe('cat-1')
   })
@@ -306,11 +306,11 @@ describe('Simulation rest seating', () => {
 
     expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
     simulation.tick(1.5)
-    expect(cat(simulation).travel?.leg.linkId).toBe(direct.value.id)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { linkId: direct.value.id } })
 
     expect(simulation.disconnectWorkerLink(direct.value.id).ok).toBe(true)
     expect(cat(simulation)).toMatchObject({ nodeId: first.value.id, status: 'travelling', stranded: null })
-    expect(cat(simulation).travel?.leg.toNodeId).toBe(detour.value.id)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { toNodeId: detour.value.id } })
   })
 
   it('limits regular modules to one road and each hub side to one road', () => {
@@ -355,5 +355,100 @@ describe('Simulation rest seating', () => {
     expect(simulation.connectWorkerNodes('rest-1', research.value.id, 1)).toMatchObject({ ok: false, reason: expect.stringContaining('Перекрытый') })
     expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)).toMatchObject({ ok: false, reason: expect.stringContaining('Перекрытый') })
     expect(simulation.snapshot().nodes.find((node) => node.id === research.value.id)).toMatchObject({ blocked: true })
+  })
+})
+
+describe('Simulation flight era', () => {
+  function unlockFlight(simulation: Simulation) {
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!research.ok || !server.ok) throw new Error('Missing flight research setup')
+    const road = simulation.connectWorkerNodes('rest-1', research.value.id, 1)
+    if (!road.ok) throw new Error(road.reason)
+    simulation.connect(research.value.id, server.value.id)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    for (let second = 0; second < 240 && !simulation.snapshot().flightUnlocked; second += 1) simulation.tick(1)
+    if (!simulation.snapshot().flightUnlocked) throw new Error('Flight did not unlock')
+    return { research: research.value, server: server.value, road: road.value }
+  }
+
+  it('unlocks at 50 data units and sends cats directly at twice road speed', () => {
+    const simulation = new Simulation()
+    const { road } = unlockFlight(simulation)
+    const totalData = simulation.snapshot().nodes.reduce((total, candidate) => total + candidate.scienceReceived, 0)
+    expect(totalData).toBe(50)
+    expect(simulation.snapshot().flightUnlocked).toBe(true)
+
+    const destination = simulation.createNode('research')
+    const other = simulation.createNode('server')
+    if (!destination.ok || !other.ok) throw new Error('Missing flight destination')
+    simulation.setNodePosition('rest-1', { x: 0, y: 0 })
+    simulation.setNodePosition(destination.value.id, { x: 500, y: 0 })
+    simulation.hireCat()
+    simulation.tick(5)
+
+    expect(simulation.assignCat('cat-2', destination.value.id, destination.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', fromSlotId: 'rest-1-slot-2', flightDurationSeconds: 1, flightProgress: 0 })
+    expect(simulation.connectWorkerNodes(destination.value.id, other.value.id, 1)).toMatchObject({ ok: true })
+    expect(simulation.createNode('hub')).toMatchObject({ ok: true })
+
+    expect(simulation.disconnectWorkerLink(road.id)).toMatchObject({ ok: true })
+    simulation.tick(0.5)
+    expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', flightProgress: 0.5 })
+    simulation.tick(0.5)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === destination.value.id)?.slots.some((slot) => slot.catId === 'cat-2')).toBe(true)
+  })
+
+  it('resumes a stranded cat by flight once stored science reaches the threshold', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!research.ok || !server.ok) throw new Error('Missing stranded setup')
+    const road = simulation.connectWorkerNodes('rest-1', research.value.id, 1)
+    if (!road.ok) throw new Error(road.reason)
+    simulation.setNodePosition('rest-1', { x: 0, y: 0 })
+    simulation.setNodePosition(research.value.id, { x: 500, y: 0 })
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    for (let second = 0; second < 160 && node(simulation, 'research').scienceBuffer < 50; second += 1) simulation.tick(1)
+
+    for (let second = 0; second < 20 && !(cat(simulation).nodeId === research.value.id && cat(simulation).status === 'idle'); second += 1) simulation.tick(1)
+    expect(simulation.releaseCat('cat-1')).toMatchObject({ ok: true })
+    expect(simulation.disconnectWorkerLink(road.value.id)).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ status: 'stranded', stranded: { targetNodeId: 'rest-1' } })
+
+    simulation.connect(research.value.id, server.value.id)
+    for (let second = 0; second < 120 && !simulation.snapshot().flightUnlocked; second += 1) simulation.tick(1)
+    expect(simulation.snapshot().flightUnlocked).toBe(true)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'flight', targetNodeId: 'rest-1', flightProgress: 0 })
+  })
+
+  it('finishes an active road leg before switching to direct flight at a hub', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing transition setup')
+    const firstRoad = simulation.connectWorkerNodes('rest-1', hub.value.id, 20, 'road', 'west')
+    const secondRoad = simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'east', 'road')
+    if (!firstRoad.ok || !secondRoad.ok) throw new Error('Missing transition road')
+    simulation.setNodePosition('rest-1', { x: 0, y: 0 })
+    simulation.setNodePosition(hub.value.id, { x: 1000, y: 0 })
+    simulation.setNodePosition(research.value.id, { x: 2000, y: 0 })
+    simulation.connect(research.value.id, server.value.id)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.hireCat()
+    simulation.tick(5)
+    for (let second = 0; second < 320 && simulation.snapshot().nodes.reduce((total, candidate) => total + candidate.scienceReceived, 0) < 46; second += 1) simulation.tick(1)
+
+    expect(simulation.assignCat('cat-2', research.value.id, research.value.slots[1].id)).toMatchObject({ ok: true })
+    for (let second = 0; second < 20 && !simulation.snapshot().flightUnlocked; second += 1) simulation.tick(1)
+    const travelling = cat(simulation, 'cat-2').travel
+    expect(travelling).toMatchObject({ kind: 'road', leg: { toNodeId: hub.value.id } })
+    if (!travelling || travelling.kind !== 'road') throw new Error('Cat did not remain on the road')
+
+    simulation.tick(firstRoad.value.travelSeconds * (1 - travelling.legProgress))
+    expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', fromNodeId: hub.value.id, targetNodeId: research.value.id })
+    expect(simulation.disconnectWorkerLink(firstRoad.value.id)).toMatchObject({ ok: true })
+    expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight' })
   })
 })

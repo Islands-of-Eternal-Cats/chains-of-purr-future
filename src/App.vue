@@ -3,15 +3,16 @@ import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
+import CatFlightEdge from './components/CatFlightEdge.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
-type SimulationSpeed = 0 | 1 | 5 | 10
+type SimulationSpeed = 0 | 1 | 5 | 10 | 100
 
 const simulation = new Simulation()
 const nodeTypes = { game: markRaw(GameNode) }
-const edgeTypes = { workerTransit: markRaw(WorkerTransitEdge) }
+const edgeTypes = { workerTransit: markRaw(WorkerTransitEdge), flightTransit: markRaw(CatFlightEdge) }
 const snapshot = ref(simulation.snapshot())
 const selectedCatId = ref<string | null>(null)
 const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
@@ -24,6 +25,7 @@ const speedOptions: Array<{ value: SimulationSpeed; label: string }> = [
   { value: 1, label: '×1' },
   { value: 5, label: '×5' },
   { value: 10, label: '×10' },
+  { value: 100, label: '×100' },
 ]
 const positions = ref<Record<string, Point>>({
   'rest-1': { x: 80, y: 270 },
@@ -53,7 +55,7 @@ const canReturnSelectedCat = computed(() => Boolean(
 
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
-  return defaultNodePosition(node.type)
+  return node.position && (node.position.x || node.position.y) ? node.position : defaultNodePosition(node.type)
 }
 
 function defaultNodePosition(type: NodeType): Point {
@@ -127,9 +129,32 @@ const flowEdges = computed<Edge[]>(() => {
     id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: roadHandle(link.nodeAPort), targetHandle: roadHandle(link.nodeBPort),
     type: 'workerTransit', animated: false, markerStart: MarkerType.ArrowClosed, markerEnd: MarkerType.ArrowClosed, class: 'worker-edge',
     selected: selectedConnection.value?.id === link.id, label: `${link.travelSeconds.toFixed(1)}с`,
-    data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.leg.linkId === link.id) },
+    data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.kind === 'road' && cat.travel.leg.linkId === link.id) },
   }))
-  return [...scienceEdges, ...workerEdges]
+  const flightEdges: Edge[] = snapshot.value.cats.flatMap((cat) => {
+    const travel = cat.travel
+    if (travel?.kind !== 'flight') return []
+    const fromNode = snapshot.value.nodes.find((node) => node.id === travel.fromNodeId)
+    const targetNode = snapshot.value.nodes.find((node) => node.id === travel.targetNodeId)
+    if (!fromNode || !targetNode) return []
+    return [{
+      id: `flight-${cat.id}`,
+      source: fromNode.id,
+      target: targetNode.id,
+      type: 'flightTransit',
+      class: 'flight-edge',
+      zIndex: 1000,
+      selectable: false,
+      focusable: false,
+      data: {
+        kind: 'flight',
+        cat,
+        origin: flightSlotPoint(fromNode, travel.fromSlotId),
+        targetPoint: flightSlotPoint(targetNode, travel.targetSlotId),
+      },
+    }]
+  })
+  return [...scienceEdges, ...workerEdges, ...flightEdges]
 })
 
 const renderedEdges = ref<Edge[]>([])
@@ -151,6 +176,20 @@ function workerTravelSeconds(firstId: string, secondId: string) {
   return Math.max(0.6, Math.hypot(second.x - first.x, second.y - first.y) / 250)
 }
 
+function flightSlotPoint(node: SimNode, slotId: string | null): Point {
+  const position = nodePosition(node)
+  const slotIndex = slotId ? node.slots.findIndex((slot) => slot.id === slotId) : -1
+  if (slotIndex < 0) return { x: position.x + nodeSize(node.type).width / 2, y: position.y + nodeSize(node.type).height / 2 }
+  const columns = node.type === 'research' ? 2 : node.type === 'server' ? 1 : 3
+  const gridWidth = nodeSize(node.type).width - 32
+  const gap = 7
+  const cellWidth = (gridWidth - gap * (columns - 1)) / columns
+  return {
+    x: position.x + 16 + cellWidth * (slotIndex % columns + .5) + gap * (slotIndex % columns),
+    y: position.y + 117,
+  }
+}
+
 function sync() {
   snapshot.value = simulation.snapshot()
 }
@@ -168,6 +207,7 @@ function createNode(type: NodeType) {
   const result = simulation.createNode(type)
   if (result.ok) {
     positions.value[result.value.id] = defaultNodePosition(type)
+    simulation.setNodePosition(result.value.id, positions.value[result.value.id])
     sync()
     syncBlockedNodes()
   }
@@ -176,9 +216,12 @@ function createNode(type: NodeType) {
 
 function catPoint(cat: Cat): Point {
   if (cat.travel) {
-    const from = nodePosition(snapshot.value.nodes.find((node) => node.id === cat.travel!.leg.fromNodeId)!)
-    const to = nodePosition(snapshot.value.nodes.find((node) => node.id === cat.travel!.leg.toNodeId)!)
-    return { x: from.x + (to.x - from.x) * cat.travel.legProgress, y: from.y + (to.y - from.y) * cat.travel.legProgress }
+    const fromId = cat.travel.kind === 'road' ? cat.travel.leg.fromNodeId : cat.travel.fromNodeId
+    const toId = cat.travel.kind === 'road' ? cat.travel.leg.toNodeId : cat.travel.targetNodeId
+    const progress = cat.travel.kind === 'road' ? cat.travel.legProgress : cat.travel.flightProgress
+    const from = nodePosition(snapshot.value.nodes.find((node) => node.id === fromId)!)
+    const to = nodePosition(snapshot.value.nodes.find((node) => node.id === toId)!)
+    return { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress }
   }
   return nodePosition(snapshot.value.nodes.find((node) => node.id === cat.nodeId)!)
 }
@@ -333,6 +376,7 @@ function updateNodePosition(event: NodeDragEvent) {
   const node = snapshot.value.nodes.find((candidate) => candidate.id === event.node.id)
   if (!node) return
   positions.value[event.node.id] = { ...event.node.position }
+  simulation.setNodePosition(event.node.id, positions.value[event.node.id])
   for (const link of snapshot.value.workerLinks) {
     simulation.updateWorkerLinkTravelTime(link.id, workerTravelSeconds(link.nodeAId, link.nodeBId))
   }
@@ -341,6 +385,8 @@ function updateNodePosition(event: NodeDragEvent) {
 
 function isValidConnection(connection: FlowConnection) {
   if (!connection.source || !connection.target || connection.source === connection.target) return false
+  const flowEdge = connection as Edge
+  if (flowEdge.id?.startsWith('flight-') || flowEdge.data?.kind === 'flight') return true
   if (connection.sourceHandle === 'science-out' && connection.targetHandle === 'science-in') return true
   const sourcePort = roadPort(connection.sourceHandle)
   const targetPort = roadPort(connection.targetHandle)
@@ -371,11 +417,13 @@ function animate(time: number) {
   previousTime = time
   const delta = elapsed * simulationSpeed.value
   if (delta > 0) {
+    const wasFlightUnlocked = snapshot.value.flightUnlocked
     const travellingCats = new Set(snapshot.value.cats.filter((cat) => cat.status === 'travelling').map((cat) => cat.id))
     simulation.tick(delta)
     sync()
     const arrivedCat = snapshot.value.cats.find((cat) => travellingCats.has(cat.id) && cat.status === 'idle')
-    if (arrivedCat) status.value = `${arrivedCat.name} прибыл: ${snapshot.value.nodes.find((node) => node.id === arrivedCat.nodeId)?.name ?? 'модуль'}.`
+    if (!wasFlightUnlocked && snapshot.value.flightUnlocked) status.value = 'Научный прорыв: коты получили возможность летать напрямую между модулями.'
+    else if (arrivedCat) status.value = `${arrivedCat.name} прибыл: ${snapshot.value.nodes.find((node) => node.id === arrivedCat.nodeId)?.name ?? 'модуль'}.`
   }
   frame = requestAnimationFrame(animate)
 }
@@ -417,6 +465,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button" type="button" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
         <button class="action-button" type="button" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
         <button class="action-button" type="button" @click="createNode('hub')"><span>◆</span> Добавить дорожный хаб</button>
+        <p v-if="snapshot.flightUnlocked" class="flight-era-note">✦ ВОЗДУШНАЯ ЭРА · коты летают напрямую</p>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
@@ -425,7 +474,8 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
         <div class="hint">
           <span class="hint-number">01</span>
-          <p>Стальные дуги — путь котов.<br />Время зависит от модулей, не изгиба.<br />Циановые каналы передают данные.</p>
+          <p v-if="!snapshot.flightUnlocked">Стальные дуги — путь котов.<br />Время зависит от модулей, не изгиба.<br />Циановые каналы передают данные.</p>
+          <p v-else>Коты летают напрямую между модулями.<br />Дороги можно строить, но коты их игнорируют.<br />Циановые каналы передают данные.</p>
         </div>
       </aside>
 
