@@ -33,10 +33,7 @@ const positions = ref<Record<string, Point>>({
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const hasResearch = computed(() => snapshot.value.nodes.some((node) => node.type === 'research'))
 const hasServer = computed(() => snapshot.value.nodes.some((node) => node.type === 'server'))
-const canHireCat = computed(() => {
-  const rest = snapshot.value.nodes.find((node) => node.type === 'rest')
-  return Boolean(rest && snapshot.value.cats.length < rest.slots.length)
-})
+const canHireCat = computed(() => true)
 const server = computed(() => snapshot.value.nodes.find((node) => node.type === 'server'))
 const totalScience = computed(() => server.value?.scienceReceived ?? 0)
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
@@ -53,7 +50,15 @@ const flowNodes = computed<Node[]>(() => {
     type: 'game',
     position: nodePosition(node),
     selected: selectedModuleId.value === node.id,
-    data: { node, cats: catIndex.value, selectedCatId: selectedCatId.value, selectedSlotId: selectedSlot.value?.slotId ?? null, onCatClick: selectCat, onSlotClick: handleSlotClick },
+    data: {
+      node,
+      cats: catIndex.value,
+      restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
+      selectedCatId: selectedCatId.value,
+      selectedSlotId: selectedSlot.value?.slotId ?? null,
+      onCatClick: selectCat,
+      onSlotClick: handleSlotClick,
+    },
   }))
   return moduleNodes
 })
@@ -100,7 +105,8 @@ function createNode(type: 'research' | 'server') {
 }
 
 function hireCat() {
-  report(simulation.hireCat(), 'Новый кот-оператор прибыл в комнату отдыха.')
+  const result = simulation.hireCat()
+  report(result, result.ok && !result.value.slotId ? `${result.value.name} ожидает свободное кресло для восстановления.` : 'Новый кот-оператор начал восстановление в комнате отдыха.')
 }
 
 function selectCat(catId: string) {
@@ -130,8 +136,8 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
     return
   }
   const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
-  if (targetNode?.type === 'rest' && assignedCatId) {
-    status.value = `${catIndex.value[assignedCatId]?.name ?? 'Кот'} закреплён за этим местом отдыха.`
+  if (targetNode?.type === 'rest') {
+    status.value = 'Все кресла в комнате отдыха используются совместно.'
     return
   }
   if (assignedCatId && !selectedCatId.value) {

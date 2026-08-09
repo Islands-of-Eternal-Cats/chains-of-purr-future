@@ -5,6 +5,7 @@ import type { Cat, SimNode } from '../core'
 interface NodeViewData {
   node: SimNode
   cats: Record<string, Cat>
+  restWaitingCats: Cat[]
   selectedCatId: string | null
   selectedSlotId: string | null
   onCatClick: (catId: string) => void
@@ -50,7 +51,7 @@ const nodeSubtitles = {
         v-for="slot in data.node.slots"
         :key="slot.id"
         class="worker-slot nodrag nopan"
-        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--rest-berth': data.node.type === 'rest' && slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0 }"
+        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0 }"
         type="button"
         @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
       >
@@ -58,7 +59,7 @@ const nodeSubtitles = {
           <span class="cat-glyph" aria-hidden="true">{{ data.cats[slot.catId]?.variant }}</span>
           <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
           <span class="cat-vigor" title="Бодрость">{{ Math.ceil(data.cats[slot.catId]?.vigor ?? 0) }}</span>
-          <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">нет пути к отдыху</span>
+          <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">отдых недоступен</span>
         </template>
         <template v-else-if="slot.reservedByCatId">
           <span class="cat-glyph cat-glyph--travelling" aria-hidden="true">↝</span>
@@ -74,6 +75,13 @@ const nodeSubtitles = {
           <span class="empty-slot-mark">+</span>
           <span>свободно</span>
         </template>
+      </button>
+    </section>
+
+    <section v-if="data.node.type === 'rest' && data.restWaitingCats.length" class="rest-waiting" aria-label="Очередь отдыха">
+      <span>ЖДУТ КРЕСЛА</span>
+      <button v-for="cat in data.restWaitingCats" :key="cat.id" class="rest-waiting__cat nodrag nopan" type="button" @click.stop="data.onCatClick(cat.id)">
+        {{ cat.variant }} {{ cat.name }} · {{ Math.ceil(cat.vigor) }}
       </button>
     </section>
 

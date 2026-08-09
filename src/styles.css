@@ -79,7 +79,6 @@ button { font: inherit; }
 .worker-slot--occupied { border-style: solid; border-color: rgba(107, 213, 238, .38); color: #d9f8ff; background: rgba(58, 166, 197, .11); }
 .worker-slot--reserved { border-color: rgba(255, 193, 96, .56); color: #ffd48f; background: rgba(177, 117, 32, .09); cursor: not-allowed; }
 .worker-slot--assigned { border-color: rgba(131, 218, 153, .42); color: #d3f8dc; background: rgba(68, 153, 88, .08); }
-.worker-slot--rest-berth { border-color: rgba(151, 167, 255, .46); color: #dde3ff; background: rgba(86, 96, 186, .1); }
 .worker-slot--exhausted { border-color: rgba(255, 96, 96, .86); color: #ffd4d4; background: rgba(183, 38, 38, .2); box-shadow: 0 0 13px rgba(255, 74, 74, .34); }
 .worker-slot--selected { outline: 1px solid #96eeff; box-shadow: 0 0 13px rgba(90, 220, 255, .28); }
 .cat-glyph { color: #a7efff; font: 700 19px/1 'DM Mono', monospace; text-shadow: 0 0 10px rgba(110, 224, 255, .65); }
@@ -90,6 +89,10 @@ button { font: inherit; }
 .slot-state { color: #d2a65f; font-size: 7px; }
 .slot-state--warning { color: #ff8e8e; }
 .empty-slot-mark { color: #6b8495; font-size: 15px; }
+.rest-waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 16px 12px; color: #d2a65f; font: 8px 'DM Mono', monospace; }
+.rest-waiting > span { width: 100%; color: #9a7f51; letter-spacing: .06em; }
+.rest-waiting__cat { border: 1px dashed rgba(210, 166, 95, .42); border-radius: 2px; padding: 4px 6px; color: #f4d59b; background: rgba(106, 75, 26, .13); font: inherit; cursor: pointer; }
+.rest-waiting__cat:hover { border-color: rgba(255, 205, 112, .8); }
 .node-metrics { display: grid; grid-template-columns: 1fr 1fr; padding: 10px 16px 12px; border-top: 1px solid rgba(146, 177, 192, .12); background: rgba(3, 8, 13, .22); }
 .node-metrics > div + div { padding-left: 13px; border-left: 1px solid rgba(146, 177, 192, .13); }
 .node-metrics span { display: block; margin-bottom: 4px; color: #6e8292; font: 8px 'DM Mono', monospace; letter-spacing: .06em; }
