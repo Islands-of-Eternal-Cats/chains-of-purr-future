@@ -115,16 +115,19 @@ describe('Simulation rest seating', () => {
     expect(simulation.snapshot().cats.filter((candidate) => candidate.slotId)).toHaveLength(3)
   })
 
-  it('does not send a cat to work before full recovery, including one in the queue', () => {
+  it('allows assigning a resting cat before full recovery, but sends it only at full vigor', () => {
     const simulation = new Simulation()
     const research = createResearch(simulation)
     simulation.hireCat()
-    simulation.hireCat()
-    simulation.hireCat()
 
-    expect(simulation.assignCat('cat-4', research.id, research.slots[0].id)).toMatchObject({ ok: false, reason: expect.stringContaining('полностью восстановить') })
-    simulation.tick(5)
-    expect(simulation.assignCat('cat-2', research.id, research.slots[0].id).ok).toBe(true)
+    expect(simulation.assignCat('cat-2', research.id, research.slots[0].id)).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: 'cat-2', reservedByCatId: null })
+    expect(cat(simulation, 'cat-2')).toMatchObject({ nodeId: 'rest-1', status: 'idle', vigor: 0 })
+
+    simulation.tick(4.9)
+    expect(cat(simulation, 'cat-2')).toMatchObject({ status: 'idle', vigor: 98 })
+    simulation.tick(0.1)
+    expect(cat(simulation, 'cat-2')).toMatchObject({ status: 'travelling', vigor: 100 })
   })
 
   it('returns an exhausted worker to the first available common seat', () => {
@@ -183,20 +186,42 @@ describe('Simulation rest seating', () => {
     expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
   })
 
-  it('requires a worker route and starts production only after arrival', () => {
+  it('keeps a full cat assigned without a route and starts the journey when a route appears', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
     if (!research.ok) throw new Error(research.reason)
 
-    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(false)
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', status: 'idle', vigor: 100 })
+
+    simulation.tick(1)
+    expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', status: 'idle', vigor: 100 })
+
     simulation.connectWorkerNodes('rest-1', research.value.id, 1)
-    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
+    simulation.tick(0)
+    expect(cat(simulation)).toMatchObject({ status: 'travelling' })
     simulation.tick(0.5)
     expect(node(simulation, 'research').productionRate).toBe(0)
     simulation.tick(0.5)
     expect(node(simulation, 'research').slots[0].catId).toBe('cat-1')
     simulation.tick(1)
     expect(node(simulation, 'research').scienceBuffer).toBeCloseTo(1)
+  })
+
+  it('scales research output with the number of occupied work slots', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.hireCat()
+    simulation.tick(5)
+
+    expect(simulation.assignCat('cat-1', research.id, research.slots[0].id).ok).toBe(true)
+    expect(simulation.assignCat('cat-2', research.id, research.slots[1].id).ok).toBe(true)
+    simulation.tick(1)
+    simulation.tick(1)
+
+    expect(node(simulation, 'research').productionRate).toBe(2)
+    expect(node(simulation, 'research').scienceBuffer).toBeCloseTo(2)
   })
 
   it('chooses the shortest multi-hop worker route with deterministic link ordering', () => {

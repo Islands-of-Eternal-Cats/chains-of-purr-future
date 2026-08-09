@@ -108,17 +108,15 @@ export class Simulation {
     const targetSlot = node?.slots.find((slot) => slot.id === slotId)
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
     if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
-    if (cat.vigor < MAX_VIGOR - EPSILON) return { ok: false, reason: 'Кот должен полностью восстановить бодрость перед работой.' }
     if (node?.type === 'rest') return { ok: false, reason: 'Для отдыха используйте возврат кота в комнату отдыха.' }
     if (!targetSlot) return { ok: false, reason: 'Рабочий слот не найден.' }
     if (targetSlot.catId || targetSlot.reservedByCatId) return { ok: false, reason: 'Этот слот уже занят или зарезервирован.' }
     if (cat.nodeId === nodeId) return { ok: false, reason: 'Кот уже находится в этом модуле.' }
-    const result = this.startTravel(cat, nodeId, targetSlot.id)
-    if (!result.ok) return result
     this.clearWorkAssignmentForCat(cat.id)
     targetSlot.assignedCatId = cat.id
+    this.returnRecoveredCatsToAssignedSlots()
     this.seatWaitingCats()
-    return result
+    return { ok: true, value: undefined }
   }
 
   clearWorkAssignment(nodeId: string, slotId: string): CommandResult<void> {
@@ -204,7 +202,7 @@ export class Simulation {
       }
       const workSeconds = Math.min(activeSeconds, cat.vigor / WORK_VIGOR_DRAIN_PER_SECOND)
       if (workSeconds > 0) {
-        activeSecondsByNode.set(cat.nodeId, Math.max(activeSecondsByNode.get(cat.nodeId) ?? 0, workSeconds))
+        activeSecondsByNode.set(cat.nodeId, (activeSecondsByNode.get(cat.nodeId) ?? 0) + workSeconds)
         cat.vigor = Math.max(0, cat.vigor - workSeconds * WORK_VIGOR_DRAIN_PER_SECOND)
       }
       if (cat.vigor <= EPSILON) {
@@ -218,7 +216,7 @@ export class Simulation {
       node.inputRate = 0
       const activeSeconds = activeSecondsByNode.get(node.id) ?? 0
       if (node.type === 'research' && activeSeconds > 0) {
-        node.productionRate = 1
+        node.productionRate = activeSeconds / deltaSeconds
         node.scienceBuffer += activeSeconds
       }
     }

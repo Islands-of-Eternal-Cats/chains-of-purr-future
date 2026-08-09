@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import type { Cat, SimNode } from '../core'
+import type { Cat, SimNode, WorkSlot } from '../core'
 
 interface NodeViewData {
   node: SimNode
   cats: Record<string, Cat>
+  unreachableCatIds?: string[]
   restWaitingCats: Cat[]
   selectedCatId: string | null
   selectedSlotId: string | null
@@ -12,7 +13,21 @@ interface NodeViewData {
   onSlotClick: (nodeId: string, slotId: string, catId: string | null, reservedCatId: string | null, assignedCatId: string | null) => void
 }
 
-defineProps<NodeProps<NodeViewData>>()
+const props = defineProps<NodeProps<NodeViewData>>()
+
+function cannotReachAssignedSlot(slot: WorkSlot) {
+  const cat = slot.assignedCatId ? props.data.cats[slot.assignedCatId] : undefined
+  return props.data.node.type !== 'rest'
+    && !slot.catId
+    && !slot.reservedByCatId
+    && cat?.status === 'idle'
+    && cat.vigor >= 100
+    && cat.nodeId !== props.data.node.id
+}
+
+function cannotReachAssignedWork(catId: string) {
+  return props.data.unreachableCatIds?.includes(catId) ?? false
+}
 
 const nodeIcons = {
   rest: '⌂',
@@ -51,12 +66,13 @@ const nodeSubtitles = {
         v-for="slot in data.node.slots"
         :key="slot.id"
         class="worker-slot nodrag nopan"
-        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0 }"
+        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
         type="button"
         @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
       >
         <template v-if="slot.catId">
           <span class="cat-glyph" aria-hidden="true">{{ data.cats[slot.catId]?.variant }}</span>
+          <span v-if="cannotReachAssignedWork(slot.catId)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
           <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
           <span class="cat-vigor" title="Бодрость">{{ Math.ceil(data.cats[slot.catId]?.vigor ?? 0) }}</span>
           <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">отдых недоступен</span>
@@ -69,7 +85,8 @@ const nodeSubtitles = {
         <template v-else-if="slot.assignedCatId">
           <span class="cat-glyph cat-glyph--assigned" aria-hidden="true">{{ data.cats[slot.assignedCatId]?.variant }}</span>
           <span class="cat-name">{{ data.cats[slot.assignedCatId]?.name }}</span>
-          <span class="slot-state">{{ data.node.type === 'rest' ? (data.cats[slot.assignedCatId]?.status === 'travelling' ? 'в пути' : 'на работе') : (data.cats[slot.assignedCatId]?.vigor ?? 0) >= 100 ? 'ждёт путь' : 'отдыхает' }}</span>
+          <span v-if="cannotReachAssignedSlot(slot)" class="slot-state slot-state--warning">путь недоступен</span>
+          <span v-else class="slot-state">{{ data.node.type === 'rest' ? (data.cats[slot.assignedCatId]?.status === 'travelling' ? 'в пути' : 'на работе') : (data.cats[slot.assignedCatId]?.vigor ?? 0) >= 100 ? 'ждёт путь' : 'отдыхает' }}</span>
         </template>
         <template v-else>
           <span class="empty-slot-mark">+</span>
@@ -81,7 +98,7 @@ const nodeSubtitles = {
     <section v-if="data.node.type === 'rest' && data.restWaitingCats.length" class="rest-waiting" aria-label="Очередь отдыха">
       <span>ЖДУТ КРЕСЛА</span>
       <button v-for="cat in data.restWaitingCats" :key="cat.id" class="rest-waiting__cat nodrag nopan" type="button" @click.stop="data.onCatClick(cat.id)">
-        {{ cat.variant }} {{ cat.name }} · {{ Math.ceil(cat.vigor) }}
+        {{ cat.variant }} {{ cat.name }} · {{ Math.ceil(cat.vigor) }}<span v-if="cannotReachAssignedWork(cat.id)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
       </button>
     </section>
 

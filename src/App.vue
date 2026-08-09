@@ -31,6 +31,16 @@ const positions = ref<Record<string, Point>>({
 })
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
+const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' ? [] : node.slots.flatMap((slot) => {
+  const cat = slot.assignedCatId ? catIndex.value[slot.assignedCatId] : undefined
+  return !slot.catId
+    && !slot.reservedByCatId
+    && cat?.status === 'idle'
+    && cat.vigor >= 100
+    && cat.nodeId !== node.id
+    ? [cat.id]
+    : []
+})))
 const canHireCat = computed(() => true)
 const totalScience = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.scienceReceived, 0))
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
@@ -61,6 +71,7 @@ const flowNodes = computed<Node[]>(() => {
     data: {
       node,
       cats: catIndex.value,
+      unreachableCatIds: unreachableCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
       selectedCatId: selectedCatId.value,
       selectedSlotId: selectedSlot.value?.slotId ?? null,
@@ -138,6 +149,19 @@ function hireCat() {
   report(result, result.ok && !result.value.slotId ? `${result.value.name} ожидает свободное кресло для восстановления.` : 'Новый кот-оператор начал восстановление в комнате отдыха.')
 }
 
+function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
+  const cat = catIndex.value[catId]
+  const nodeName = snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'
+  const result = simulation.assignCat(catId, nodeId, slotId)
+  const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === catId) : undefined
+  const success = updatedCat?.status === 'travelling'
+    ? `${cat?.name ?? 'Кот'} закреплён за местом и идёт к модулю: ${nodeName}.`
+    : (updatedCat?.vigor ?? 0) < 100
+      ? `${cat?.name ?? 'Кот'} закреплён за местом и отправится после полного восстановления.`
+      : `${cat?.name ?? 'Кот'} закреплён за местом, но пока не может дойти: слот отмечен красным.`
+  report(result, success)
+}
+
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
   if (cat.status === 'travelling') {
@@ -146,7 +170,7 @@ function selectCat(catId: string) {
   }
   if (selectedSlot.value) {
     const target = selectedSlot.value
-    report(simulation.assignCat(catId, target.nodeId, target.slotId), `${cat.name} идёт к модулю: ${snapshot.value.nodes.find((node) => node.id === target.nodeId)?.name ?? 'узел'}.`)
+    assignCatToWorkSlot(catId, target.nodeId, target.slotId)
     selectedSlot.value = null
     selectedCatId.value = null
     return
@@ -180,9 +204,7 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
     status.value = wasSelected ? 'Выбор слота отменён.' : 'Слот выбран. Теперь выберите кота.'
     return
   }
-  const cat = catIndex.value[selectedCatId.value]
-  const replacedAssignment = Boolean(assignedCatId && assignedCatId !== cat.id)
-  report(simulation.assignCat(selectedCatId.value, nodeId, slotId), replacedAssignment ? `${cat.name} закреплён за местом и идёт к модулю.` : `${cat.name} закреплён за местом и идёт к модулю: ${snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'}.`)
+  assignCatToWorkSlot(selectedCatId.value, nodeId, slotId)
   selectedCatId.value = null
 }
 
