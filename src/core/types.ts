@@ -4,6 +4,7 @@ export interface WorkSlot {
   id: string
   catId: string | null
   reservedByCatId: string | null
+  assignedCatId: string | null
 }
 
 export interface TravelLeg {
@@ -28,6 +29,7 @@ export interface Cat {
   slotId: string | null
   status: 'idle' | 'travelling'
   travel: CatTravel | null
+  vigor: number
 }
 
 export interface SimNode {

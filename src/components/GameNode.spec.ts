@@ -18,7 +18,7 @@ describe('GameNode', () => {
         zIndex: 0,
         events: {} as any,
         data: {
-          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null }, { id: 'slot-2', catId: null, reservedByCatId: null }], scienceBuffer: 1.25, scienceReceived: 0, productionRate: 1, inputRate: 0 },
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null, assignedCatId: null }, { id: 'slot-2', catId: null, reservedByCatId: null, assignedCatId: null }], scienceBuffer: 1.25, scienceReceived: 0, productionRate: 1, inputRate: 0 },
           cats: {},
           selectedCatId: null,
           selectedSlotId: null,
@@ -31,6 +31,22 @@ describe('GameNode', () => {
     expect(wrapper.text()).toContain('Выработка')
     expect(wrapper.text()).toContain('1.3')
     await wrapper.find('.worker-slot').trigger('click')
-    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null, null)
+    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null, null, null)
+  })
+
+  it('marks an exhausted worker without a route to rest', () => {
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: 'cat-1', reservedByCatId: null, assignedCatId: 'cat-1' }], scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0 },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: 'slot-1', status: 'idle', travel: null, vigor: 0 } },
+          selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+    expect(wrapper.find('.worker-slot').classes()).toContain('worker-slot--exhausted')
+    expect(wrapper.text()).toContain('нет пути к отдыху')
   })
 })

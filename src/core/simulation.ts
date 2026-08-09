@@ -4,9 +4,12 @@ const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
 const CAT_VARIANTS = ['◕', '◔', '◑', '◒', '◐']
 const EPSILON = 0.000001
+const MAX_VIGOR = 100
+const WORK_VIGOR_DRAIN_PER_SECOND = 10
+const REST_VIGOR_RECOVERY_PER_SECOND = 20
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
-  return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null }))
+  return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
 }
 
 function copyNode(node: SimNode): SimNode {
@@ -59,15 +62,18 @@ export class Simulation {
 
   hireCat(): CommandResult<Cat> {
     const rest = this.nodes.get(REST_ID)!
-    const freeSlot = rest.slots.find((slot) => slot.catId === null && slot.reservedByCatId === null)
+    if (this.cats.size >= rest.slots.length) return { ok: false, reason: 'Нельзя нанять больше котов, чем мест в комнате отдыха.' }
+    const freeSlot = rest.slots.find((slot) => slot.assignedCatId === null && slot.catId === null && slot.reservedByCatId === null)
     if (!freeSlot) return { ok: false, reason: 'В комнате отдыха нет свободных мест.' }
     this.catCounter += 1
     const index = this.catCounter - 1
     const cat: Cat = {
       id: `cat-${this.catCounter}`, name: CAT_NAMES[index % CAT_NAMES.length], variant: CAT_VARIANTS[index % CAT_VARIANTS.length],
       nodeId: REST_ID, slotId: freeSlot.id, status: 'idle', travel: null,
+      vigor: MAX_VIGOR,
     }
     freeSlot.catId = cat.id
+    freeSlot.assignedCatId = cat.id
     this.cats.set(cat.id, cat)
     return { ok: true, value: copyCat(cat) }
   }
@@ -78,10 +84,26 @@ export class Simulation {
     const targetSlot = node?.slots.find((slot) => slot.id === slotId)
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
     if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
+    if (node?.type === 'rest') return { ok: false, reason: 'Для отдыха используйте возврат кота в комнату отдыха.' }
     if (!targetSlot) return { ok: false, reason: 'Рабочий слот не найден.' }
     if (targetSlot.catId || targetSlot.reservedByCatId) return { ok: false, reason: 'Этот слот уже занят или зарезервирован.' }
     if (cat.nodeId === nodeId) return { ok: false, reason: 'Кот уже находится в этом модуле.' }
-    return this.startTravel(cat, nodeId, targetSlot.id)
+    const result = this.startTravel(cat, nodeId, targetSlot.id)
+    if (!result.ok) return result
+    this.clearWorkAssignmentForCat(cat.id)
+    targetSlot.assignedCatId = cat.id
+    return result
+  }
+
+  clearWorkAssignment(nodeId: string, slotId: string): CommandResult<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node || node.type === 'rest') return { ok: false, reason: 'Рабочий слот не найден.' }
+    const slot = node.slots.find((candidate) => candidate.id === slotId)
+    if (!slot) return { ok: false, reason: 'Рабочий слот не найден.' }
+    if (slot.catId || slot.reservedByCatId) return { ok: false, reason: 'Нельзя снять назначение с занятого слота.' }
+    if (!slot.assignedCatId) return { ok: false, reason: 'У этого слота нет назначения.' }
+    slot.assignedCatId = null
+    return { ok: true, value: undefined }
   }
 
   releaseCat(catId: string): CommandResult<void> {
@@ -89,8 +111,8 @@ export class Simulation {
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
     if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
     if (cat.nodeId === REST_ID) return { ok: false, reason: 'Кот уже отдыхает.' }
-    const restSlot = this.nodes.get(REST_ID)!.slots.find((slot) => slot.catId === null && slot.reservedByCatId === null)
-    if (!restSlot) return { ok: false, reason: 'В комнате отдыха нет свободных мест.' }
+    const restSlot = this.findRestBerth(cat.id)
+    if (!restSlot || restSlot.catId || restSlot.reservedByCatId) return { ok: false, reason: 'Личное место кота в комнате отдыха недоступно.' }
     return this.startTravel(cat, REST_ID, restSlot.id)
   }
 
@@ -148,15 +170,26 @@ export class Simulation {
     const activeSecondsByNode = new Map<string, number>()
     for (const cat of this.cats.values()) {
       const activeSeconds = this.advanceCat(cat, deltaSeconds)
-      if (activeSeconds > 0 && cat.status === 'idle') {
-        activeSecondsByNode.set(cat.nodeId, Math.max(activeSecondsByNode.get(cat.nodeId) ?? 0, activeSeconds))
+      if (activeSeconds <= 0) continue
+      if (cat.nodeId === REST_ID) {
+        cat.vigor = Math.min(MAX_VIGOR, cat.vigor + activeSeconds * REST_VIGOR_RECOVERY_PER_SECOND)
+        continue
+      }
+      const workSeconds = Math.min(activeSeconds, cat.vigor / WORK_VIGOR_DRAIN_PER_SECOND)
+      if (workSeconds > 0) {
+        activeSecondsByNode.set(cat.nodeId, Math.max(activeSecondsByNode.get(cat.nodeId) ?? 0, workSeconds))
+        cat.vigor = Math.max(0, cat.vigor - workSeconds * WORK_VIGOR_DRAIN_PER_SECOND)
+      }
+      if (cat.vigor <= EPSILON) {
+        this.returnTiredCat(cat)
       }
     }
+    this.returnRecoveredCatsToAssignedSlots()
     for (const node of this.nodes.values()) {
       node.productionRate = 0
       node.inputRate = 0
       const activeSeconds = activeSecondsByNode.get(node.id) ?? 0
-      if (node.type === 'research' && node.slots.some((slot) => slot.catId !== null)) {
+      if (node.type === 'research' && activeSeconds > 0) {
         node.productionRate = 1
         node.scienceBuffer += activeSeconds
       }
@@ -190,6 +223,42 @@ export class Simulation {
     cat.status = 'travelling'
     cat.travel = { targetNodeId, targetSlotId, path, legIndex: 0, legProgress: 0 }
     return { ok: true, value: undefined }
+  }
+
+  private returnTiredCat(cat: Cat) {
+    const restSlot = this.findRestBerth(cat.id)
+    if (restSlot && !restSlot.catId && !restSlot.reservedByCatId) this.startTravel(cat, REST_ID, restSlot.id)
+  }
+
+  private returnRecoveredCatsToAssignedSlots() {
+    for (const cat of this.cats.values()) {
+      if (cat.status !== 'idle' || cat.nodeId !== REST_ID || cat.vigor < MAX_VIGOR - EPSILON) continue
+      const assignment = this.findWorkAssignment(cat.id)
+      if (!assignment || assignment.slot.catId || assignment.slot.reservedByCatId) continue
+      this.startTravel(cat, assignment.node.id, assignment.slot.id)
+    }
+  }
+
+  private findWorkAssignment(catId: string): { node: SimNode; slot: WorkSlot } | null {
+    for (const node of this.nodes.values()) {
+      if (node.type === 'rest') continue
+      const slot = node.slots.find((candidate) => candidate.assignedCatId === catId)
+      if (slot) return { node, slot }
+    }
+    return null
+  }
+
+  private findRestBerth(catId: string): WorkSlot | null {
+    return this.nodes.get(REST_ID)?.slots.find((slot) => slot.assignedCatId === catId) ?? null
+  }
+
+  private clearWorkAssignmentForCat(catId: string) {
+    for (const node of this.nodes.values()) {
+      if (node.type === 'rest') continue
+      for (const slot of node.slots) {
+        if (slot.assignedCatId === catId) slot.assignedCatId = null
+      }
+    }
   }
 
   private findPath(startId: string, targetId: string): TravelLeg[] | null {

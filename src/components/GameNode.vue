@@ -8,7 +8,7 @@ interface NodeViewData {
   selectedCatId: string | null
   selectedSlotId: string | null
   onCatClick: (catId: string) => void
-  onSlotClick: (nodeId: string, slotId: string, catId: string | null, reservedCatId: string | null) => void
+  onSlotClick: (nodeId: string, slotId: string, catId: string | null, reservedCatId: string | null, assignedCatId: string | null) => void
 }
 
 defineProps<NodeProps<NodeViewData>>()
@@ -50,18 +50,25 @@ const nodeSubtitles = {
         v-for="slot in data.node.slots"
         :key="slot.id"
         class="worker-slot nodrag nopan"
-        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId }"
+        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--rest-berth': data.node.type === 'rest' && slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0 }"
         type="button"
-        @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId)"
+        @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
       >
         <template v-if="slot.catId">
           <span class="cat-glyph" aria-hidden="true">{{ data.cats[slot.catId]?.variant }}</span>
           <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
+          <span class="cat-vigor" title="Бодрость">{{ Math.ceil(data.cats[slot.catId]?.vigor ?? 0) }}</span>
+          <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">нет пути к отдыху</span>
         </template>
         <template v-else-if="slot.reservedByCatId">
           <span class="cat-glyph cat-glyph--travelling" aria-hidden="true">↝</span>
           <span>{{ data.cats[slot.reservedByCatId]?.name }}</span>
           <span class="slot-state">в пути</span>
+        </template>
+        <template v-else-if="slot.assignedCatId">
+          <span class="cat-glyph cat-glyph--assigned" aria-hidden="true">{{ data.cats[slot.assignedCatId]?.variant }}</span>
+          <span class="cat-name">{{ data.cats[slot.assignedCatId]?.name }}</span>
+          <span class="slot-state">{{ data.node.type === 'rest' ? (data.cats[slot.assignedCatId]?.status === 'travelling' ? 'в пути' : 'на работе') : (data.cats[slot.assignedCatId]?.vigor ?? 0) >= 100 ? 'ждёт путь' : 'отдыхает' }}</span>
         </template>
         <template v-else>
           <span class="empty-slot-mark">+</span>

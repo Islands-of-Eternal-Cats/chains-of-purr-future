@@ -25,6 +25,10 @@ const positions = ref<Record<string, Point>>({
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const hasResearch = computed(() => snapshot.value.nodes.some((node) => node.type === 'research'))
 const hasServer = computed(() => snapshot.value.nodes.some((node) => node.type === 'server'))
+const canHireCat = computed(() => {
+  const rest = snapshot.value.nodes.find((node) => node.type === 'rest')
+  return Boolean(rest && snapshot.value.cats.length < rest.slots.length)
+})
 const server = computed(() => snapshot.value.nodes.find((node) => node.type === 'server'))
 const totalScience = computed(() => server.value?.scienceReceived ?? 0)
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
@@ -105,16 +109,26 @@ function selectCat(catId: string) {
     return
   }
   selectedCatId.value = selectedCatId.value === catId ? null : catId
-  status.value = selectedCatId.value ? `${cat.name} выбран. Кликните по свободному слоту.` : 'Выбор кота отменён.'
+  status.value = selectedCatId.value ? `${cat.name} выбран. Кликните по рабочему слоту.` : 'Выбор кота отменён.'
 }
 
-function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null) {
+function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null, assignedCatId: string | null) {
   if (occupiedCatId) {
     selectCat(occupiedCatId)
     return
   }
   if (reservedCatId) {
     status.value = `${catIndex.value[reservedCatId]?.name ?? 'Кот'} уже идёт к этому слоту.`
+    return
+  }
+  const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
+  if (targetNode?.type === 'rest' && assignedCatId) {
+    status.value = `${catIndex.value[assignedCatId]?.name ?? 'Кот'} закреплён за этим местом отдыха.`
+    return
+  }
+  if (assignedCatId && !selectedCatId.value) {
+    const cat = catIndex.value[assignedCatId]
+    report(simulation.clearWorkAssignment(nodeId, slotId), `${cat?.name ?? 'Кот'} больше не закреплён за этим местом.`)
     return
   }
   if (!selectedCatId.value) {
@@ -124,7 +138,8 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
     return
   }
   const cat = catIndex.value[selectedCatId.value]
-  report(simulation.assignCat(selectedCatId.value, nodeId, slotId), `${cat.name} идёт к модулю: ${snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'}.`)
+  const replacedAssignment = Boolean(assignedCatId && assignedCatId !== cat.id)
+  report(simulation.assignCat(selectedCatId.value, nodeId, slotId), replacedAssignment ? `${cat.name} закреплён за местом и идёт к модулю.` : `${cat.name} закреплён за местом и идёт к модулю: ${snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'}.`)
   selectedCatId.value = null
 }
 
@@ -217,7 +232,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
-        <button class="hire-button" type="button" @click="hireCat"><span>◕</span> Нанять кота</button>
+        <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота</button>
         <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
         <div class="hint">
           <span class="hint-number">01</span>
