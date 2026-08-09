@@ -34,6 +34,11 @@ const positions = ref<Record<string, Point>>({
 })
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
+const assignedCatIds = computed(() => new Set(snapshot.value.nodes.flatMap((node) => node.slots.flatMap((slot) => slot.assignedCatId ? [slot.assignedCatId] : []))))
+const unassignedRestCatIds = computed(() => snapshot.value.cats.flatMap((cat) => {
+  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
+  return cat.status === 'idle' && cat.slotId && currentNode?.type === 'rest' && !assignedCatIds.value.has(cat.id) ? [cat.id] : []
+}))
 const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' || node.type === 'hub' ? [] : node.slots.flatMap((slot) => {
   const cat = slot.assignedCatId ? catIndex.value[slot.assignedCatId] : undefined
   return !slot.catId
@@ -109,6 +114,7 @@ const flowNodes = computed<Node[]>(() => {
       blocked: node.blocked,
       cats: catIndex.value,
       unreachableCatIds: unreachableCatIds.value,
+      unassignedRestCatIds: unassignedRestCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
       strandedCats: snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded'),
       selectedCatId: selectedCatId.value,

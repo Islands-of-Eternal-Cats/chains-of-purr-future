@@ -7,6 +7,7 @@ interface NodeViewData {
   blocked?: boolean
   cats: Record<string, Cat>
   unreachableCatIds?: string[]
+  unassignedRestCatIds?: string[]
   restWaitingCats: Cat[]
   strandedCats?: Cat[]
   selectedCatId: string | null
@@ -36,6 +37,10 @@ function cannotReachAssignedSlot(slot: WorkSlot) {
 
 function cannotReachAssignedWork(catId: string) {
   return props.data.unreachableCatIds?.includes(catId) ?? false
+}
+
+function isUnassignedRestCat(slot: WorkSlot) {
+  return props.data.node.type === 'rest' && Boolean(slot.catId && props.data.unassignedRestCatIds?.includes(slot.catId))
 }
 
 const nodeIcons = { rest: '⌂', research: '✦', server: '▦', hub: '◆' }
@@ -98,7 +103,7 @@ const nodeSubtitles = {
           v-for="slot in data.node.slots"
           :key="slot.id"
           class="worker-slot nodrag nopan"
-          :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
+          :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--unassigned': isUnassignedRestCat(slot), 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
           type="button"
           :disabled="data.blocked"
           @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
@@ -108,6 +113,7 @@ const nodeSubtitles = {
             <span v-if="cannotReachAssignedWork(slot.catId)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
             <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
             <span class="cat-vigor" title="Бодрость">{{ Math.ceil(data.cats[slot.catId]?.vigor ?? 0) }}</span>
+            <span v-if="isUnassignedRestCat(slot)" class="slot-state slot-state--unassigned">без работы</span>
             <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">отдых недоступен</span>
           </template>
           <template v-else-if="slot.reservedByCatId">

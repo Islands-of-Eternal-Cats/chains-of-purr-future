@@ -8,4 +8,9 @@
 
 - [x] 2.1 Update the ordinary-module deletion success message to describe evacuation and rerouting.
 - [ ] 2.2 Add simulation tests for occupied and target deletion, deterministic rest allocation and overflow, intermediate-road rerouting, and reference cleanup.
-- [ ] 2.3 Run the complete test suite, production build, and strict OpenSpec validation.
+- [x] 2.3 Run the complete test suite, production build, and strict OpenSpec validation.
+
+## 3. Unassigned-cat indicator
+
+- [x] 3.1 Derive seated unassigned cat IDs and render their rest seats with an amber "без работы" treatment.
+- [x] 3.2 Add component coverage for highlighted unassigned cats and unchanged assigned rest cats.

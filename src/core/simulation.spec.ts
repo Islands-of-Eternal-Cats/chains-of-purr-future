@@ -82,14 +82,17 @@ describe('Simulation rest seating', () => {
     })
   })
 
-  it('keeps modules that cats occupy or use as a route', () => {
+  it('evacuates cats from a removed occupied module and keeps the base rest room', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
     if (!research.ok) throw new Error(research.reason)
     simulation.connectWorkerNodes('rest-1', research.value.id, 2)
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(2)
 
-    expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Мира') })
+    expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', slotId: 'rest-1-slot-1', status: 'idle', travel: null, stranded: null })
+    expect(simulation.snapshot().nodes).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: research.value.id })]))
     expect(simulation.deleteNode('rest-1')).toMatchObject({ ok: false, reason: expect.stringContaining('Базовую') })
   })
 

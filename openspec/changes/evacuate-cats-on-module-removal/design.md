@@ -1,6 +1,6 @@
 ## Context
 
-Ordinary deletion currently rejects any cat whose location, final target, stranded target, or active road leg references the node. Core simulation state now owns module positions and discriminates road and flight travel, while rest-room waiting already uses `idle` cats with no slot. See proposal.md for motivation and the safe-module-removal spec for observable behavior.
+Ordinary deletion currently rejects any cat whose location, final target, stranded target, or active road leg references the node. Core simulation state now owns module positions and discriminates road and flight travel, while rest-room waiting already uses `idle` cats with no slot. Work assignments remain stored on work slots rather than cats. See proposal.md for motivation and the capability specs for observable behavior.
 
 ## Goals / Non-Goals
 
@@ -9,6 +9,7 @@ Ordinary deletion currently rejects any cat whose location, final target, strand
 - Perform cat-state recovery and node removal as one synchronous simulation command.
 - Reuse existing rest waiting, stranded recovery, assignment, and destination-reservation semantics.
 - Choose evacuation seats deterministically from core-owned geometry.
+- Make seated cats without any work assignment visually distinct without adding simulation state.
 
 **Non-Goals:**
 
@@ -36,11 +37,16 @@ Road-only interruptions retain `targetNodeId`, `targetSlotId`, `sourceNodeId`, a
 
 Core state contains all node positions needed for evacuation, so `deleteNode` needs no UI-supplied rescue map and keeps its `CommandResult<void>` interface. The UI only updates its success copy. Hub deletion remains separate because its established contract relocates cats to hubs rather than rest rooms.
 
+### Derive the unassigned indicator in the UI
+
+Build the assigned-cat set from every work slot's `assignedCatId`, then pass IDs of idle, seated rest-room cats outside that set to the node view. The component applies a static amber class and visible label only to matching occupied rest seats. This keeps assignment truth in existing slot state, avoids a duplicated core flag, and leaves waiting cats and assigned resting cats unchanged.
+
 ## Risks / Trade-offs
 
 - [A full-vigor evacuated cat has a surviving assignment and may depart again on the next tick] → This follows the existing automatic-return contract and preserves player intent.
 - [Multiple evacuated cats compete for limited seats] → Process cats in stable ID order and reserve each selected seat immediately.
 - [Missing geometry in external callers produces ties] → Use the simulation's existing zero-position fallback and deterministic IDs.
+- [Amber styling could conflict with selection and route errors] → Restrict it to unassigned rest seats and retain the existing cyan selected outline and red route-warning precedence.
 
 ## Migration Plan
 

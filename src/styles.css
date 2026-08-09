@@ -92,11 +92,13 @@ button { font: inherit; }
 .slot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; min-height: 76px; padding: 13px 16px; }
 .game-node--research .slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .game-node--server .slot-grid { grid-template-columns: minmax(0, 1fr); }
-.worker-slot { min-width: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; border: 1px dashed rgba(147, 174, 190, .24); border-radius: 2px; color: #60798b; background: rgba(5, 9, 15, .23); font: 9px 'DM Mono', monospace; cursor: pointer; transition: .15s ease; }
+.worker-slot { position: relative; min-width: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; border: 1px dashed rgba(147, 174, 190, .24); border-radius: 2px; color: #60798b; background: rgba(5, 9, 15, .23); font: 9px 'DM Mono', monospace; cursor: pointer; transition: .15s ease; }
 .worker-slot:hover { border-color: rgba(132, 226, 249, .64); color: #bbecf7; }
 .worker-slot--occupied { border-style: solid; border-color: rgba(107, 213, 238, .38); color: #d9f8ff; background: rgba(58, 166, 197, .11); }
 .worker-slot--reserved { border-color: rgba(255, 193, 96, .56); color: #ffd48f; background: rgba(177, 117, 32, .09); cursor: not-allowed; }
 .worker-slot--assigned { border-color: rgba(131, 218, 153, .42); color: #d3f8dc; background: rgba(68, 153, 88, .08); }
+.worker-slot--unassigned { padding-bottom: 12px; border-color: rgba(255, 193, 96, .78); color: #ffe0aa; background: rgba(177, 117, 32, .14); box-shadow: 0 0 11px rgba(255, 180, 70, .22); }
+.worker-slot--unassigned .cat-glyph { color: #ffd17e; text-shadow: 0 0 10px rgba(255, 185, 77, .48); }
 .worker-slot--exhausted, .worker-slot--unreachable { border-color: rgba(255, 96, 96, .86); color: #ffd4d4; background: rgba(183, 38, 38, .2); box-shadow: 0 0 13px rgba(255, 74, 74, .34); }
 .worker-slot--selected { outline: 1px solid #96eeff; box-shadow: 0 0 13px rgba(90, 220, 255, .28); }
 .cat-glyph { color: #a7efff; font: 700 19px/1 'DM Mono', monospace; text-shadow: 0 0 10px rgba(110, 224, 255, .65); }
@@ -107,6 +109,7 @@ button { font: inherit; }
 .cat-vigor { color: #9ee7a4; font-size: 8px; }
 .slot-state { color: #d2a65f; font-size: 7px; }
 .slot-state--warning { color: #ff8e8e; }
+.slot-state--unassigned { position: absolute; right: 4px; bottom: 3px; left: 4px; color: #ffc96b; letter-spacing: .03em; text-align: center; }
 .empty-slot-mark { color: #6b8495; font-size: 15px; }
 .rest-waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 16px 12px; color: #d2a65f; font: 8px 'DM Mono', monospace; }
 .rest-waiting > span { width: 100%; color: #9a7f51; letter-spacing: .06em; }
