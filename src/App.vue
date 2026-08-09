@@ -108,7 +108,7 @@ const flowNodes = computed<Node[]>(() => {
       cats: catIndex.value,
       unreachableCatIds: unreachableCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
-      strandedCats: node.type === 'hub' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded') : [],
+      strandedCats: snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded'),
       selectedCatId: selectedCatId.value,
       selectedSlotId: selectedSlot.value?.slotId ?? null,
       onCatClick: selectCat,

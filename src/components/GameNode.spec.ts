@@ -52,6 +52,23 @@ describe('GameNode', () => {
     expect(wrapper.text()).toContain('отдых недоступен')
   })
 
+  it('renders a stranded cat at an ordinary module', () => {
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null, assignedCatId: null }], scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0 },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: null, status: 'stranded', travel: null, stranded: { targetNodeId: 'rest-1', targetSlotId: 'rest-1-slot-1', sourceNodeId: 'server-1' }, vigor: 0 } },
+          restWaitingCats: [],
+          strandedCats: [{ id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: null, status: 'stranded', travel: null, stranded: { targetNodeId: 'rest-1', targetSlotId: 'rest-1-slot-1', sourceNodeId: 'server-1' }, vigor: 0 }],
+          selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+    expect(wrapper.find('.stranded-cats').text()).toBe('◕ Мира · путь недоступен')
+  })
+
   it('marks an assigned cat red when it cannot reach the work slot', () => {
     const wrapper = mount(GameNode, {
       props: {

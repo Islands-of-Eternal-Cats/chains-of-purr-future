@@ -237,8 +237,17 @@ export class Simulation {
 
   disconnectWorkerLink(linkId: string): CommandResult<void> {
     if (!this.workerLinks.has(linkId)) return { ok: false, reason: 'Переход для котов не найден.' }
-    if ([...this.cats.values()].some((cat) => cat.travel?.leg.linkId === linkId)) return { ok: false, reason: 'Нельзя отключить переход, пока по нему идёт кот.' }
+    for (const cat of this.cats.values()) {
+      if (cat.travel?.leg.linkId !== linkId) continue
+      const travel = cat.travel
+      cat.nodeId = travel.leg.fromNodeId
+      cat.slotId = null
+      cat.status = 'stranded'
+      cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+      cat.travel = null
+    }
     this.workerLinks.delete(linkId)
+    this.resumeStrandedCats()
     return { ok: true, value: undefined }
   }
 

@@ -70,7 +70,7 @@ const nodeSubtitles = {
       <strong>ДОРОЖНЫЙ ХАБ</strong>
       <p>4 направления</p>
       <p v-if="data.blocked" class="node-blocked-message">ПЕРЕКРЫТИЕ · ПЕРЕМЕСТИТЕ</p>
-      <section v-if="data.strandedCats?.length" class="hub-stranded" aria-label="Коты без маршрута">
+      <section v-if="data.strandedCats?.length" class="stranded-cats" aria-label="Коты без маршрута">
         <span v-for="cat in data.strandedCats" :key="cat.id">{{ cat.variant }} {{ cat.name }} · путь недоступен</span>
       </section>
     </template>
@@ -126,6 +126,10 @@ const nodeSubtitles = {
       </section>
 
       <p v-if="data.blocked" class="node-blocked-message">ПЕРЕКРЫТИЕ · ПЕРЕМЕСТИТЕ УЗЕЛ</p>
+
+      <section v-if="data.strandedCats?.length" class="stranded-cats" aria-label="Коты без маршрута">
+        <span v-for="cat in data.strandedCats" :key="cat.id">{{ cat.variant }} {{ cat.name }} · путь недоступен</span>
+      </section>
 
       <section v-if="data.node.type === 'rest' && data.restWaitingCats.length" class="rest-waiting" aria-label="Очередь отдыха">
         <span>ЖДУТ КРЕСЛА</span>

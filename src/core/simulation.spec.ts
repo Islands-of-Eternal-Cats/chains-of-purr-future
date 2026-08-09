@@ -274,7 +274,7 @@ describe('Simulation rest seating', () => {
     expect(node(simulation, 'server').inputRate).toBeCloseTo(0.5)
   })
 
-  it('does not disconnect a worker link carrying a cat and updates a link duration', () => {
+  it('returns a travelling cat to its current leg source when removing its link', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
     if (!research.ok) throw new Error(research.reason)
@@ -282,11 +282,35 @@ describe('Simulation rest seating', () => {
     if (!link.ok) throw new Error(link.reason)
 
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
-    expect(simulation.disconnectWorkerLink(link.value.id).ok).toBe(false)
     expect(simulation.updateWorkerLinkTravelTime(link.value.id, 0.5).ok).toBe(true)
-    simulation.tick(0.5)
-    expect(node(simulation, 'research').slots[0].catId).toBe('cat-1')
+    simulation.tick(0.25)
     expect(simulation.disconnectWorkerLink(link.value.id).ok).toBe(true)
+    expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', status: 'stranded', travel: null, stranded: { targetNodeId: research.value.id } })
+    expect(node(simulation, 'research').slots[0].reservedByCatId).toBe('cat-1')
+  })
+
+  it('reroutes a returned cat immediately after removing its current link', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const first = simulation.createNode('hub')
+    const detour = simulation.createNode('hub')
+    const last = simulation.createNode('hub')
+    if (!research.ok || !first.ok || !detour.ok || !last.ok) throw new Error('Missing node')
+
+    simulation.connectWorkerNodes('rest-1', first.value.id, 1, 'road', 'west')
+    const direct = simulation.connectWorkerNodes(first.value.id, last.value.id, 2, 'east', 'west')
+    simulation.connectWorkerNodes(first.value.id, detour.value.id, 1, 'north', 'west')
+    simulation.connectWorkerNodes(detour.value.id, last.value.id, 1, 'east', 'north')
+    simulation.connectWorkerNodes(last.value.id, research.value.id, 1, 'east', 'road')
+    if (!direct.ok) throw new Error(direct.reason)
+
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
+    simulation.tick(1.5)
+    expect(cat(simulation).travel?.leg.linkId).toBe(direct.value.id)
+
+    expect(simulation.disconnectWorkerLink(direct.value.id).ok).toBe(true)
+    expect(cat(simulation)).toMatchObject({ nodeId: first.value.id, status: 'travelling', stranded: null })
+    expect(cat(simulation).travel?.leg.toNodeId).toBe(detour.value.id)
   })
 
   it('limits regular modules to one road and each hub side to one road', () => {

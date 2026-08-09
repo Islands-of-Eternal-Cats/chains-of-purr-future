@@ -76,8 +76,9 @@ button { font: inherit; }
 .hub-icon { color: #d6e4e9; font: 18px/1 'DM Mono', monospace; text-shadow: 0 0 10px rgba(176, 207, 220, .56); }
 .game-node--hub strong { color: #d9e4ee; font: 700 7px/1.2 'DM Mono', monospace; letter-spacing: .08em; }
 .game-node--hub p { margin: 0; color: #8299aa; font: 7px 'DM Mono', monospace; }
-.hub-stranded { display: grid; gap: 4px; margin-top: 3px; color: #ffd4d4; font: 8px/1.25 'DM Mono', monospace; }
-.hub-stranded span { border: 1px solid rgba(255, 96, 96, .8); padding: 4px; background: rgba(183, 38, 38, .22); box-shadow: 0 0 9px rgba(255, 74, 74, .3); }
+.stranded-cats { display: grid; gap: 4px; margin: 3px 16px 0; color: #ffd4d4; font: 8px/1.25 'DM Mono', monospace; }
+.game-node--hub .stranded-cats { margin: 3px 0 0; }
+.stranded-cats span { border: 1px solid rgba(255, 96, 96, .8); padding: 4px; background: rgba(183, 38, 38, .22); box-shadow: 0 0 9px rgba(255, 74, 74, .3); }
 .node-header { min-height: 79px; display: flex; align-items: center; gap: 12px; padding: 15px 17px 13px; border-bottom: 1px solid rgba(146, 177, 192, .16); }
 .node-icon { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(137, 220, 242, .28); border-radius: 2px; color: #8ceaff; background: rgba(74, 184, 215, .08); font-size: 18px; text-shadow: 0 0 13px rgba(104, 226, 255, .7); }
 .node-eyebrow { color: #6d8798; font-size: 8px; }
