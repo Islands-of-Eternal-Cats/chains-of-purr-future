@@ -37,6 +37,9 @@ button { font: inherit; }
 .action-button span, .hire-button span { color: #8ceaff; font-size: 18px; line-height: 1; }
 .action-button:hover:not(:disabled), .hire-button:hover { border-color: rgba(117, 225, 255, .7); background: rgba(78, 180, 211, .11); color: #f2fbff; box-shadow: inset 0 0 18px rgba(67, 193, 225, .06); }
 .action-button:disabled { opacity: .37; cursor: not-allowed; }
+.action-button--danger:not(:disabled) { border-color: rgba(242, 121, 121, .45); color: #f1b4b4; }
+.action-button--danger:not(:disabled) span { color: #ff9797; }
+.action-button--danger:hover:not(:disabled) { border-color: rgba(255, 136, 136, .84); background: rgba(176, 57, 57, .14); color: #ffe4e4; box-shadow: inset 0 0 18px rgba(223, 73, 73, .1); }
 .hire-button { border-color: rgba(113, 206, 230, .42); color: #dcf8ff; background: rgba(48, 159, 188, .1); }
 .panel-rule { height: 1px; margin: 27px 5px; background: rgba(151, 180, 198, .13); }
 .hint { position: absolute; right: 21px; bottom: 30px; left: 22px; display: flex; gap: 10px; color: #698094; }

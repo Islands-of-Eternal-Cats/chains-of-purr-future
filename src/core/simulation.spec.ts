@@ -65,6 +65,34 @@ describe('Simulation rest seating', () => {
     expect(cat(simulation, 'cat-4')).toMatchObject({ nodeId: rest.value.id, slotId: `${rest.value.id}-slot-1` })
   })
 
+  it('deletes an unused module and all of its links', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!research.ok || !server.ok) throw new Error('Missing work node')
+    const workerLink = simulation.connectWorkerNodes('rest-1', research.value.id, 1)
+    if (!workerLink.ok) throw new Error(workerLink.reason)
+    simulation.connect(research.value.id, server.value.id)
+
+    expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: true })
+    expect(simulation.snapshot()).toMatchObject({
+      nodes: expect.not.arrayContaining([expect.objectContaining({ id: research.value.id })]),
+      connections: [],
+      workerLinks: [],
+    })
+  })
+
+  it('keeps modules that cats occupy or use as a route', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.connectWorkerNodes('rest-1', research.value.id, 2)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+
+    expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Мира') })
+    expect(simulation.deleteNode('rest-1')).toMatchObject({ ok: false, reason: expect.stringContaining('Базовую') })
+  })
+
   it('starts with common seats, while new hires begin tired', () => {
     const simulation = new Simulation()
     expect(node(simulation, 'rest').slots).toHaveLength(3)

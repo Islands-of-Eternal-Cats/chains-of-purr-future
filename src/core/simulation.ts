@@ -60,6 +60,31 @@ export class Simulation {
     return { ok: true, value: copyNode(node) }
   }
 
+  deleteNode(nodeId: string): CommandResult<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node) return { ok: false, reason: 'Модуль не найден.' }
+    if (nodeId === REST_ID) return { ok: false, reason: 'Базовую комнату отдыха удалить нельзя.' }
+
+    const linkedWorkerIds = new Set(
+      [...this.workerLinks.values()]
+        .filter((link) => link.nodeAId === nodeId || link.nodeBId === nodeId)
+        .map((link) => link.id),
+    )
+    const catUsingNode = [...this.cats.values()].find((cat) =>
+      cat.nodeId === nodeId
+      || cat.travel?.targetNodeId === nodeId
+      || cat.travel?.path.some((leg) => leg.fromNodeId === nodeId || leg.toNodeId === nodeId || linkedWorkerIds.has(leg.linkId)),
+    )
+    if (catUsingNode) return { ok: false, reason: `${catUsingNode.name} находится в модуле или следует через него.` }
+
+    for (const connection of this.connections.values()) {
+      if (connection.sourceId === nodeId || connection.targetId === nodeId) this.connections.delete(connection.id)
+    }
+    for (const linkId of linkedWorkerIds) this.workerLinks.delete(linkId)
+    this.nodes.delete(nodeId)
+    return { ok: true, value: undefined }
+  }
+
   hireCat(): CommandResult<Cat> {
     return this.addCat(0)
   }

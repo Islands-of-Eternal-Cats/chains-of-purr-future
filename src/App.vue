@@ -112,6 +112,27 @@ function createNode(type: NodeType) {
   report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : 'Сервер данных подключён к лаборатории.')
 }
 
+function deleteSelectedNode() {
+  const nodeId = selectedModuleId.value
+  if (!nodeId) return
+  const nodeName = snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'Модуль'
+  const removesSelectedConnection = Boolean(
+    selectedConnection.value
+    && ([...snapshot.value.connections, ...snapshot.value.workerLinks] as Array<{ id: string; sourceId?: string; targetId?: string; nodeAId?: string; nodeBId?: string }>).some((connection) =>
+      connection.id === selectedConnection.value?.id
+      && (connection.sourceId === nodeId || connection.targetId === nodeId || connection.nodeAId === nodeId || connection.nodeBId === nodeId),
+    ),
+  )
+  const result = simulation.deleteNode(nodeId)
+  if (result.ok) {
+    delete positions.value[nodeId]
+    if (selectedSlot.value?.nodeId === nodeId) selectedSlot.value = null
+    if (removesSelectedConnection) selectedConnection.value = null
+    selectedModuleId.value = null
+  }
+  report(result, `${nodeName} удалён вместе со всеми связанными каналами.`)
+}
+
 function hireCat() {
   const result = simulation.hireCat()
   report(result, result.ok && !result.value.slotId ? `${result.value.name} ожидает свободное кресло для восстановления.` : 'Новый кот-оператор начал восстановление в комнате отдыха.')
@@ -275,6 +296,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button" type="button" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
         <button class="action-button" type="button" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
+        <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
         <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота</button>
