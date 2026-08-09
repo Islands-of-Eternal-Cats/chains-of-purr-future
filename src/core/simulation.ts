@@ -85,24 +85,54 @@ export class Simulation {
     if (node.type === 'hub') return { ok: false, reason: 'Дорожный хаб удаляется отдельной командой.' }
     if (nodeId === REST_ID) return { ok: false, reason: 'Базовую комнату отдыха удалить нельзя.' }
 
-    const linkedWorkerIds = new Set(this.linksForNode(nodeId).map((link) => link.id))
-    const catUsingNode = [...this.cats.values()].find((cat) =>
-      cat.nodeId === nodeId
-      || cat.travel?.targetNodeId === nodeId
-      || (cat.travel?.kind === 'road' && (
-        cat.travel.leg.fromNodeId === nodeId
-        || cat.travel.leg.toNodeId === nodeId
-        || linkedWorkerIds.has(cat.travel.leg.linkId)
-      ))
-      || cat.stranded?.targetNodeId === nodeId,
-    )
-    if (catUsingNode) return { ok: false, reason: `${catUsingNode.name} находится в модуле или следует через него.` }
+    const evacuations = [...this.cats.values()]
+      .sort((first, second) => first.id.localeCompare(second.id))
+      .flatMap((cat) => {
+        const travel = cat.travel
+        const losesCurrentModule = cat.nodeId === nodeId || (travel?.kind === 'flight' && travel.fromNodeId === nodeId)
+        const losesFinalTarget = travel?.targetNodeId === nodeId || cat.stranded?.targetNodeId === nodeId
+        const losesRoadStart = travel?.kind === 'road' && travel.leg.fromNodeId === nodeId
+        if (!losesCurrentModule && !losesFinalTarget && !losesRoadStart) return []
+        return [{ cat, position: this.catPosition(cat) }]
+      })
+    const evacuationIds = new Set(evacuations.map(({ cat }) => cat.id))
+    const interruptedRoadCats = [...this.cats.values()]
+      .filter((cat) => !evacuationIds.has(cat.id)
+        && cat.travel?.kind === 'road'
+        && cat.travel.leg.toNodeId === nodeId
+        && cat.travel.targetNodeId !== nodeId)
+      .sort((first, second) => first.id.localeCompare(second.id))
+
+    for (const { cat } of evacuations) {
+      this.releaseCatOccupancyAndReservations(cat.id)
+      cat.slotId = null
+      cat.status = 'idle'
+      cat.travel = null
+      cat.stranded = null
+    }
+    for (const cat of interruptedRoadCats) {
+      const travel = cat.travel
+      if (!travel || travel.kind !== 'road') continue
+      cat.nodeId = travel.leg.fromNodeId
+      cat.slotId = null
+      cat.status = 'stranded'
+      cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+      cat.travel = null
+    }
 
     for (const connection of this.connections.values()) {
       if (connection.sourceId === nodeId || connection.targetId === nodeId) this.connections.delete(connection.id)
     }
     for (const link of this.linksForNode(nodeId)) this.workerLinks.delete(link.id)
     this.nodes.delete(nodeId)
+
+    for (const { cat, position } of evacuations) {
+      const restSeat = this.findNearestRestSeat(position)
+      cat.nodeId = restSeat?.node.id ?? REST_ID
+      cat.slotId = restSeat?.slot.id ?? null
+      if (restSeat) restSeat.slot.catId = cat.id
+    }
+    this.resumeStrandedCats()
     return { ok: true, value: undefined }
   }
 
@@ -418,6 +448,18 @@ export class Simulation {
     return null
   }
 
+  private findNearestRestSeat(position: Point): { node: SimNode; slot: WorkSlot } | null {
+    const candidates = [...this.nodes.values()].flatMap((node) => {
+      if (node.type !== 'rest' || node.blocked) return []
+      const nodePosition = node.position ?? { x: 0, y: 0 }
+      return node.slots
+        .filter((slot) => !slot.catId && !slot.reservedByCatId)
+        .map((slot) => ({ node, slot, distance: Math.hypot(nodePosition.x - position.x, nodePosition.y - position.y) }))
+    })
+    candidates.sort((first, second) => first.distance - second.distance || first.node.id.localeCompare(second.node.id) || first.slot.id.localeCompare(second.slot.id))
+    return candidates[0] ?? null
+  }
+
   private seatWaitingCats() {
     for (const cat of this.cats.values()) {
       if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.slotId) continue
@@ -434,6 +476,27 @@ export class Simulation {
       if (node.type === 'rest' || node.type === 'hub') continue
       for (const slot of node.slots) if (slot.assignedCatId === catId) slot.assignedCatId = null
     }
+  }
+
+  private releaseCatOccupancyAndReservations(catId: string) {
+    for (const node of this.nodes.values()) {
+      for (const slot of node.slots) {
+        if (slot.catId === catId) slot.catId = null
+        if (slot.reservedByCatId === catId) slot.reservedByCatId = null
+      }
+    }
+  }
+
+  private catPosition(cat: Cat): Point {
+    if (cat.travel) {
+      const fromId = cat.travel.kind === 'road' ? cat.travel.leg.fromNodeId : cat.travel.fromNodeId
+      const toId = cat.travel.kind === 'road' ? cat.travel.leg.toNodeId : cat.travel.targetNodeId
+      const progress = cat.travel.kind === 'road' ? cat.travel.legProgress : cat.travel.flightProgress
+      const from = this.nodes.get(fromId)?.position ?? { x: 0, y: 0 }
+      const to = this.nodes.get(toId)?.position ?? { x: 0, y: 0 }
+      return { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress }
+    }
+    return { ...(this.nodes.get(cat.nodeId)?.position ?? { x: 0, y: 0 }) }
   }
 
   private linksForNode(nodeId: string) {

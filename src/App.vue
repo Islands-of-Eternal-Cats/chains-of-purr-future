@@ -154,7 +154,7 @@ const flowEdges = computed<Edge[]>(() => {
       },
     }]
   })
-  return [...scienceEdges, ...workerEdges, ...flightEdges]
+  return [...scienceEdges, ...workerEdges, ...(simulationSpeed.value === 1 ? flightEdges : [])]
 })
 
 const renderedEdges = ref<Edge[]>([])
@@ -259,7 +259,7 @@ function deleteSelectedNode() {
     if (removesSelectedConnection) selectedConnection.value = null
     selectedModuleId.value = null
   }
-  report(result, selectedNode?.type === 'hub' ? `${nodeName} удалён; затронутые коты остановлены у ближайших хабов.` : `${nodeName} удалён вместе со всеми связанными каналами.`)
+  report(result, selectedNode?.type === 'hub' ? `${nodeName} удалён; затронутые коты остановлены у ближайших хабов.` : `${nodeName} удалён вместе со всеми связанными каналами; затронутые коты эвакуированы или перенаправлены.`)
   if (result.ok) syncBlockedNodes()
 }
 
@@ -422,7 +422,10 @@ function animate(time: number) {
     simulation.tick(delta)
     sync()
     const arrivedCat = snapshot.value.cats.find((cat) => travellingCats.has(cat.id) && cat.status === 'idle')
-    if (!wasFlightUnlocked && snapshot.value.flightUnlocked) status.value = 'Научный прорыв: коты получили возможность летать напрямую между модулями.'
+    if (!wasFlightUnlocked && snapshot.value.flightUnlocked) {
+      simulationSpeed.value = 1
+      status.value = 'Научный прорыв: коты получили возможность летать напрямую между модулями. Скорость снижена до ×1.'
+    }
     else if (arrivedCat) status.value = `${arrivedCat.name} прибыл: ${snapshot.value.nodes.find((node) => node.id === arrivedCat.nodeId)?.name ?? 'модуль'}.`
   }
   frame = requestAnimationFrame(animate)
