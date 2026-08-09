@@ -6,6 +6,7 @@ import GameNode from './components/GameNode.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
 
 type Point = { x: number; y: number }
+type SimulationSpeed = 0 | 1 | 5 | 10
 
 const simulation = new Simulation()
 const nodeTypes = { game: markRaw(GameNode) }
@@ -16,6 +17,13 @@ const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
 const selectedConnection = ref<{ id: string; kind: 'science' | 'worker' } | null>(null)
 const selectedModuleId = ref<string | null>(null)
 const status = ref('Создайте лабораторию и назначьте кота на исследование.')
+const simulationSpeed = ref<SimulationSpeed>(1)
+const speedOptions: Array<{ value: SimulationSpeed; label: string }> = [
+  { value: 0, label: 'Пауза' },
+  { value: 1, label: '×1' },
+  { value: 5, label: '×5' },
+  { value: 10, label: '×10' },
+]
 const positions = ref<Record<string, Point>>({
   'rest-1': { x: 80, y: 270 },
   'research-1': { x: 440, y: 150 },
@@ -195,11 +203,17 @@ function isValidConnection(connection: FlowConnection) {
   return (connection.sourceHandle === 'science-out' && connection.targetHandle === 'science-in') || (connection.sourceHandle === 'worker-out' && connection.targetHandle === 'worker-in')
 }
 
+function setSimulationSpeed(speed: SimulationSpeed) {
+  simulationSpeed.value = speed
+  status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${speed}.`
+}
+
 let frame = 0
 let previousTime = 0
 function animate(time: number) {
-  const delta = previousTime ? Math.min((time - previousTime) / 1000, 0.25) : 0
+  const elapsed = previousTime ? Math.min((time - previousTime) / 1000, 0.25) : 0
   previousTime = time
+  const delta = elapsed * simulationSpeed.value
   if (delta > 0) {
     const travellingCats = new Set(snapshot.value.cats.filter((cat) => cat.status === 'travelling').map((cat) => cat.id))
     simulation.tick(delta)
@@ -221,7 +235,23 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <span class="brand-mark">✦</span>
         <div><p>CATMAND / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
       </div>
-      <div class="science-readout"><span>НАУЧНЫЕ ДАННЫЕ</span><strong>{{ totalScience.toFixed(1) }}</strong><em>ед.</em></div>
+      <div class="topbar-actions">
+        <div class="speed-control" aria-label="Скорость симуляции">
+          <span>СКОРОСТЬ</span>
+          <div class="speed-control__buttons">
+            <button
+              v-for="option in speedOptions"
+              :key="option.value"
+              class="speed-button"
+              :class="{ 'speed-button--active': simulationSpeed === option.value }"
+              type="button"
+              :aria-pressed="simulationSpeed === option.value"
+              @click="setSimulationSpeed(option.value)"
+            >{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="science-readout"><span>НАУЧНЫЕ ДАННЫЕ</span><strong>{{ totalScience.toFixed(1) }}</strong><em>ед.</em></div>
+      </div>
     </header>
 
     <section class="workspace">
