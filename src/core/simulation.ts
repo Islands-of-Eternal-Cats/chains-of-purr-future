@@ -137,6 +137,14 @@ export class Simulation {
     return { ok: true, value: { ...connection } }
   }
 
+  disconnect(connectionId: string): CommandResult<void> {
+    if (!this.connections.has(connectionId)) {
+      return { ok: false, reason: 'Канал данных не найден.' }
+    }
+    this.connections.delete(connectionId)
+    return { ok: true, value: undefined }
+  }
+
   tick(deltaSeconds: number): CommandResult<void> {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) {
       return { ok: false, reason: 'Время симуляции должно быть неотрицательным числом.' }

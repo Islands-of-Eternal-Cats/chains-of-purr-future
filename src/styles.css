@@ -41,6 +41,7 @@ button { font: inherit; }
 .vue-flow__node { width: 286px; border: 0; background: none; font-family: 'Manrope', sans-serif; }
 .vue-flow__node.selected .game-node { border-color: rgba(139, 233, 255, .75); box-shadow: 0 0 0 1px rgba(128, 224, 255, .18), 0 18px 45px rgba(0, 0, 0, .38); }
 .vue-flow__edge-path { stroke: #64d8f6; stroke-width: 2; filter: drop-shadow(0 0 5px rgba(80, 208, 243, .52)); }
+.vue-flow__edge.selected .vue-flow__edge-path { stroke: #ffc66f; stroke-width: 3; filter: drop-shadow(0 0 7px rgba(255, 191, 82, .72)); }
 .vue-flow__edge.animated path { stroke-dasharray: 6; animation: dashdraw .45s linear infinite; }
 .vue-flow__edge-text { fill: #d7f7ff; }
 .connection-preview { stroke: #8ceaff; stroke-width: 2px; fill: none; stroke-dasharray: 5 4; }

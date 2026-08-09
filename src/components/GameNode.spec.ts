@@ -21,6 +21,7 @@ describe('GameNode', () => {
           node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null }, { id: 'slot-2', catId: null }], scienceBuffer: 1.25, scienceReceived: 0, productionRate: 1, inputRate: 0 },
           cats: {},
           selectedCatId: null,
+          selectedSlotId: null,
           onCatClick: vi.fn(),
           onSlotClick,
         },

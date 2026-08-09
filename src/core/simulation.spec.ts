@@ -48,6 +48,18 @@ describe('Simulation', () => {
     expect(node(simulation, 'server').scienceReceived).toBeCloseTo(0.5)
   })
 
+  it('removes an existing connection and rejects an unknown channel', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!research.ok || !server.ok) return
+    const connection = simulation.connect(research.value.id, server.value.id)
+    if (!connection.ok) return
+    expect(simulation.disconnect(connection.value.id).ok).toBe(true)
+    expect(simulation.snapshot().connections).toHaveLength(0)
+    expect(simulation.disconnect(connection.value.id).ok).toBe(false)
+  })
+
   it('doubles server throughput with its operator and leaves excess in the source buffer', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')

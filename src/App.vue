@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Node, type NodeDragEvent } from '@vue-flow/core'
+import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type EdgeMouseEvent, type Node, type NodeDragEvent } from '@vue-flow/core'
 import { Simulation, type Cat, type CommandResult, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
 
@@ -10,6 +10,8 @@ const simulation = new Simulation()
 const nodeTypes = { game: markRaw(GameNode) }
 const snapshot = ref(simulation.snapshot())
 const selectedCatId = ref<string | null>(null)
+const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
+const selectedConnectionId = ref<string | null>(null)
 const status = ref('Создайте лабораторию и назначьте кота на исследование.')
 const positions = ref<Record<string, Point>>({
   'rest-1': { x: 80, y: 270 },
@@ -22,6 +24,8 @@ const hasResearch = computed(() => snapshot.value.nodes.some((node) => node.type
 const hasServer = computed(() => snapshot.value.nodes.some((node) => node.type === 'server'))
 const server = computed(() => snapshot.value.nodes.find((node) => node.type === 'server'))
 const totalScience = computed(() => server.value?.scienceReceived ?? 0)
+const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
+const canReturnSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.nodeId !== 'rest-1'))
 
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
@@ -36,6 +40,7 @@ const flowNodes = computed<Node[]>(() => snapshot.value.nodes.map((node) => ({
     node,
     cats: catIndex.value,
     selectedCatId: selectedCatId.value,
+    selectedSlotId: selectedSlot.value?.slotId ?? null,
     onCatClick: selectCat,
     onSlotClick: handleSlotClick,
   },
@@ -51,6 +56,7 @@ const flowEdges = computed(() => snapshot.value.connections.map((connection) => 
   animated: true,
   markerEnd: MarkerType.ArrowClosed,
   class: 'science-edge',
+  selected: connection.id === selectedConnectionId.value,
 })))
 
 function sync() {
@@ -79,23 +85,38 @@ function hireCat() {
 }
 
 function selectCat(catId: string) {
-  selectedCatId.value = selectedCatId.value === catId ? null : catId
   const cat = catIndex.value[catId]
+  if (selectedSlot.value) {
+    const target = selectedSlot.value
+    report(simulation.assignCat(catId, target.nodeId, target.slotId), `${cat.name} назначен: ${snapshot.value.nodes.find((node) => node.id === target.nodeId)?.name ?? 'узел'}.`)
+    selectedSlot.value = null
+    selectedCatId.value = null
+    return
+  }
+  selectedCatId.value = selectedCatId.value === catId ? null : catId
   status.value = selectedCatId.value ? `${cat.name} выбран. Кликните по свободному слоту.` : 'Выбор кота отменён.'
 }
 
 function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null) {
   if (occupiedCatId) {
-    report(simulation.releaseCat(occupiedCatId), `${catIndex.value[occupiedCatId]?.name ?? 'Кот'} возвращается в комнату отдыха.`)
-    if (selectedCatId.value === occupiedCatId) selectedCatId.value = null
+    selectCat(occupiedCatId)
     return
   }
   if (!selectedCatId.value) {
-    status.value = 'Сначала выберите кота в занятом слоте.'
+    const wasSelected = selectedSlot.value?.slotId === slotId
+    selectedSlot.value = wasSelected ? null : { nodeId, slotId }
+    status.value = wasSelected ? 'Выбор слота отменён.' : 'Слот выбран. Теперь выберите кота.'
     return
   }
   const cat = catIndex.value[selectedCatId.value]
   report(simulation.assignCat(selectedCatId.value, nodeId, slotId), `${cat.name} назначен: ${snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'}.`)
+  selectedCatId.value = null
+}
+
+function returnSelectedCat() {
+  if (!selectedCat.value) return
+  const cat = selectedCat.value
+  report(simulation.releaseCat(cat.id), `${cat.name} возвращается в комнату отдыха.`)
   selectedCatId.value = null
 }
 
@@ -104,7 +125,18 @@ function onConnect(connection: FlowConnection) {
   report(simulation.connect(connection.source, connection.target), 'Канал научных данных установлен.')
 }
 
-function onNodeDragStop(event: NodeDragEvent) {
+function selectConnection(event: EdgeMouseEvent) {
+  selectedConnectionId.value = event.edge.id
+  status.value = 'Канал выбран. Его можно отключить в панели.'
+}
+
+function disconnectSelected() {
+  if (!selectedConnectionId.value) return
+  report(simulation.disconnect(selectedConnectionId.value), 'Канал научных данных отключён.')
+  selectedConnectionId.value = null
+}
+
+function updateNodePosition(event: NodeDragEvent) {
   positions.value[event.node.id] = { ...event.node.position }
 }
 
@@ -125,7 +157,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" @contextmenu.prevent>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">✦</span>
@@ -139,12 +171,14 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
         <button class="action-button" type="button" :disabled="hasResearch" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
         <button class="action-button" type="button" :disabled="hasServer" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
+        <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnectionId" @click="disconnectSelected"><span>×</span> Отключить канал</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
         <button class="hire-button" type="button" @click="hireCat"><span>◕</span> Нанять кота</button>
+        <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
         <div class="hint">
           <span class="hint-number">01</span>
-          <p>Выберите кота, затем свободный слот.<br />Тяните циановый выход исследований к входу сервера.</p>
+          <p>Выберите кота и слот в любом порядке.<br />Тяните циановый выход исследований к входу сервера.</p>
         </div>
       </aside>
 
@@ -157,10 +191,13 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           :min-zoom="0.55"
           :max-zoom="1.4"
           :fit-view-on-init="false"
+          :nodes-draggable="true"
           :connection-mode="ConnectionMode.Strict"
           :is-valid-connection="(connection) => connection.source !== connection.target"
           @connect="onConnect"
-          @node-drag-stop="onNodeDragStop"
+          @edge-click="selectConnection"
+          @node-drag="updateNodePosition"
+          @node-drag-stop="updateNodePosition"
         >
           <template #connection-line="{ sourceX, sourceY, targetX, targetY }">
             <path class="connection-preview" :d="`M ${sourceX},${sourceY} L ${targetX},${targetY}`" />

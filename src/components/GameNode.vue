@@ -6,6 +6,7 @@ interface NodeViewData {
   node: SimNode
   cats: Record<string, Cat>
   selectedCatId: string | null
+  selectedSlotId: string | null
   onCatClick: (catId: string) => void
   onSlotClick: (nodeId: string, slotId: string, catId: string | null) => void
 }
@@ -49,7 +50,7 @@ const nodeSubtitles = {
         v-for="slot in data.node.slots"
         :key="slot.id"
         class="worker-slot nodrag nopan"
-        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId, 'worker-slot--occupied': slot.catId }"
+        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId }"
         type="button"
         @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId)"
       >
