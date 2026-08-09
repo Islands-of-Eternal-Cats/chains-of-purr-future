@@ -29,7 +29,7 @@ const catPoint = computed(() => {
 </script>
 
 <template>
-  <path :d="edgePath" class="flight-path" fill="none" />
+  <!-- <path :d="edgePath" class="flight-path" fill="none" /> -->
   <g v-if="catPoint" class="flight-cat-token" :transform="`translate(${catPoint.x} ${catPoint.y})`">
     <title>{{ data?.cat.name }} в полёте</title>
     <circle r="14" />
