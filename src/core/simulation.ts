@@ -1,4 +1,4 @@
-import type { Cat, CommandResult, Connection, NodeType, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'
+import type { Cat, CommandResult, Connection, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'
 
 const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
@@ -7,17 +7,28 @@ const EPSILON = 0.000001
 const MAX_VIGOR = 100
 const WORK_VIGOR_DRAIN_PER_SECOND = 10
 const REST_VIGOR_RECOVERY_PER_SECOND = 20
+const FLIGHT_UNLOCK_DATA = 50
+const ROAD_SPEED_PIXELS_PER_SECOND = 250
+const MIN_ROAD_TRAVEL_SECONDS = 0.6
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
   return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
 }
 
 function copyNode(node: SimNode): SimNode {
-  return { ...node, slots: node.slots.map((slot) => ({ ...slot })) }
+  return { ...node, position: { ...(node.position ?? { x: 0, y: 0 }) }, slots: node.slots.map((slot) => ({ ...slot })) }
 }
 
 function copyCat(cat: Cat): Cat {
-  return { ...cat, travel: cat.travel ? { ...cat.travel, path: cat.travel.path.map((leg) => ({ ...leg })) } : null }
+  return {
+    ...cat,
+    travel: cat.travel ? cat.travel.kind === 'road' ? { ...cat.travel, leg: { ...cat.travel.leg } } : { ...cat.travel } : null,
+    stranded: cat.stranded ? { ...cat.stranded } : null,
+  }
+}
+
+function roadPorts(type: NodeType): RoadPort[] {
+  return type === 'hub' ? ['north', 'east', 'south', 'west'] : ['road']
 }
 
 export class Simulation {
@@ -27,10 +38,13 @@ export class Simulation {
   private readonly workerLinks = new Map<string, WorkerLink>()
   private nodeCounter = 0
   private catCounter = 0
+  private flightUnlocked = false
 
   constructor() {
     this.nodes.set(REST_ID, {
       id: REST_ID, type: 'rest', name: 'Комната отдыха', slots: slots(REST_ID, 3),
+      blocked: false,
+      position: { x: 80, y: 270 },
       scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
     })
     this.addCat(MAX_VIGOR)
@@ -42,6 +56,7 @@ export class Simulation {
       cats: [...this.cats.values()].map(copyCat),
       connections: [...this.connections.values()].map((connection) => ({ ...connection })),
       workerLinks: [...this.workerLinks.values()].map((link) => ({ ...link })),
+      flightUnlocked: this.flightUnlocked,
     }
   }
 
@@ -52,8 +67,12 @@ export class Simulation {
       id = `${type}-${this.nodeCounter}`
     } while (this.nodes.has(id))
     const node: SimNode = {
-      id, type, name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : 'Сервер данных',
-      slots: slots(id, type === 'rest' ? 3 : type === 'research' ? 2 : 1),
+      id,
+      type,
+      name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : type === 'server' ? 'Сервер данных' : 'Дорожный хаб',
+      blocked: false,
+      position: { x: 0, y: 0 },
+      slots: slots(id, type === 'rest' ? 3 : type === 'research' ? 2 : type === 'server' ? 1 : 0),
       scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
     }
     this.nodes.set(id, node)
@@ -63,25 +82,97 @@ export class Simulation {
   deleteNode(nodeId: string): CommandResult<void> {
     const node = this.nodes.get(nodeId)
     if (!node) return { ok: false, reason: 'Модуль не найден.' }
+    if (node.type === 'hub') return { ok: false, reason: 'Дорожный хаб удаляется отдельной командой.' }
     if (nodeId === REST_ID) return { ok: false, reason: 'Базовую комнату отдыха удалить нельзя.' }
 
-    const linkedWorkerIds = new Set(
-      [...this.workerLinks.values()]
-        .filter((link) => link.nodeAId === nodeId || link.nodeBId === nodeId)
-        .map((link) => link.id),
-    )
-    const catUsingNode = [...this.cats.values()].find((cat) =>
-      cat.nodeId === nodeId
-      || cat.travel?.targetNodeId === nodeId
-      || cat.travel?.path.some((leg) => leg.fromNodeId === nodeId || leg.toNodeId === nodeId || linkedWorkerIds.has(leg.linkId)),
-    )
-    if (catUsingNode) return { ok: false, reason: `${catUsingNode.name} находится в модуле или следует через него.` }
+    const evacuations = [...this.cats.values()]
+      .sort((first, second) => first.id.localeCompare(second.id))
+      .flatMap((cat) => {
+        const travel = cat.travel
+        const losesCurrentModule = cat.nodeId === nodeId || (travel?.kind === 'flight' && travel.fromNodeId === nodeId)
+        const losesFinalTarget = travel?.targetNodeId === nodeId || cat.stranded?.targetNodeId === nodeId
+        const losesRoadStart = travel?.kind === 'road' && travel.leg.fromNodeId === nodeId
+        if (!losesCurrentModule && !losesFinalTarget && !losesRoadStart) return []
+        return [{ cat, position: this.catPosition(cat) }]
+      })
+    const evacuationIds = new Set(evacuations.map(({ cat }) => cat.id))
+    const interruptedRoadCats = [...this.cats.values()]
+      .filter((cat) => !evacuationIds.has(cat.id)
+        && cat.travel?.kind === 'road'
+        && cat.travel.leg.toNodeId === nodeId
+        && cat.travel.targetNodeId !== nodeId)
+      .sort((first, second) => first.id.localeCompare(second.id))
+
+    for (const { cat } of evacuations) {
+      this.releaseCatOccupancyAndReservations(cat.id)
+      cat.slotId = null
+      cat.status = 'idle'
+      cat.travel = null
+      cat.stranded = null
+    }
+    for (const cat of interruptedRoadCats) {
+      const travel = cat.travel
+      if (!travel || travel.kind !== 'road') continue
+      cat.nodeId = travel.leg.fromNodeId
+      cat.slotId = null
+      cat.status = 'stranded'
+      cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+      cat.travel = null
+    }
 
     for (const connection of this.connections.values()) {
       if (connection.sourceId === nodeId || connection.targetId === nodeId) this.connections.delete(connection.id)
     }
-    for (const linkId of linkedWorkerIds) this.workerLinks.delete(linkId)
+    for (const link of this.linksForNode(nodeId)) this.workerLinks.delete(link.id)
     this.nodes.delete(nodeId)
+
+    for (const { cat, position } of evacuations) {
+      const restSeat = this.findNearestRestSeat(position)
+      cat.nodeId = restSeat?.node.id ?? REST_ID
+      cat.slotId = restSeat?.slot.id ?? null
+      if (restSeat) restSeat.slot.catId = cat.id
+    }
+    this.resumeStrandedCats()
+    return { ok: true, value: undefined }
+  }
+
+  hubDeletionImpact(hubId: string): CommandResult<string[]> {
+    const hub = this.nodes.get(hubId)
+    if (hub?.type !== 'hub') return { ok: false, reason: 'Дорожный хаб не найден.' }
+    const incidentIds = new Set(this.linksForNode(hubId).map((link) => link.id))
+    return {
+      ok: true,
+      value: [...this.cats.values()]
+        .filter((cat) => cat.nodeId === hubId || (cat.status === 'travelling' && cat.travel?.kind === 'road' && incidentIds.has(cat.travel.leg.linkId)))
+        .map((cat) => cat.id),
+    }
+  }
+
+  deleteRoadHub(hubId: string, rescueHubByCatId: Record<string, string>): CommandResult<void> {
+    const impact = this.hubDeletionImpact(hubId)
+    if (!impact.ok) return impact
+    const survivingHubIds = [...this.nodes.values()].filter((node) => node.type === 'hub' && node.id !== hubId).map((node) => node.id)
+    for (const catId of impact.value) {
+      if (!survivingHubIds.length) continue
+      if (!survivingHubIds.includes(rescueHubByCatId[catId])) return { ok: false, reason: 'Для каждого затронутого кота нужен существующий дорожный хаб.' }
+    }
+
+    for (const link of this.linksForNode(hubId)) this.workerLinks.delete(link.id)
+    this.nodes.delete(hubId)
+    for (const catId of impact.value) {
+      const cat = this.cats.get(catId)
+      if (!cat) continue
+      const target = cat.travel
+        ? { targetNodeId: cat.travel.targetNodeId, targetSlotId: cat.travel.targetSlotId, sourceNodeId: cat.travel.sourceNodeId }
+        : cat.stranded
+      if (!target) continue
+      cat.nodeId = survivingHubIds.length ? rescueHubByCatId[cat.id] : target.sourceNodeId
+      cat.slotId = null
+      cat.status = 'stranded'
+      cat.travel = null
+      cat.stranded = { ...target }
+    }
+    this.resumeStrandedCats()
     return { ok: true, value: undefined }
   }
 
@@ -89,13 +180,27 @@ export class Simulation {
     return this.addCat(0)
   }
 
+  setNodeBlocked(nodeId: string, blocked: boolean): CommandResult<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node) return { ok: false, reason: 'Модуль не найден.' }
+    node.blocked = blocked
+    return { ok: true, value: undefined }
+  }
+
+  setNodePosition(nodeId: string, position: Point): CommandResult<void> {
+    const node = this.nodes.get(nodeId)
+    if (!node) return { ok: false, reason: 'Модуль не найден.' }
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return { ok: false, reason: 'Координаты модуля должны быть конечными числами.' }
+    node.position = { ...position }
+    return { ok: true, value: undefined }
+  }
+
   private addCat(vigor: number): CommandResult<Cat> {
     this.catCounter += 1
     const index = this.catCounter - 1
     const cat: Cat = {
       id: `cat-${this.catCounter}`, name: CAT_NAMES[index % CAT_NAMES.length], variant: CAT_VARIANTS[index % CAT_VARIANTS.length],
-      nodeId: REST_ID, slotId: null, status: 'idle', travel: null,
-      vigor,
+      nodeId: REST_ID, slotId: null, status: 'idle', travel: null, stranded: null, vigor,
     }
     this.cats.set(cat.id, cat)
     this.seatWaitingCats()
@@ -107,8 +212,9 @@ export class Simulation {
     const node = this.nodes.get(nodeId)
     const targetSlot = node?.slots.find((slot) => slot.id === slotId)
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
-    if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
-    if (node?.type === 'rest') return { ok: false, reason: 'Для отдыха используйте возврат кота в комнату отдыха.' }
+    if (node?.blocked || this.nodes.get(cat.nodeId)?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
+    if (cat.status === 'travelling' || cat.status === 'stranded') return { ok: false, reason: 'Кот уже следует к назначенной цели.' }
+    if (node?.type === 'rest' || node?.type === 'hub') return { ok: false, reason: 'Рабочий слот не найден.' }
     if (!targetSlot) return { ok: false, reason: 'Рабочий слот не найден.' }
     if (targetSlot.catId || targetSlot.reservedByCatId) return { ok: false, reason: 'Этот слот уже занят или зарезервирован.' }
     if (cat.nodeId === nodeId) return { ok: false, reason: 'Кот уже находится в этом модуле.' }
@@ -121,7 +227,7 @@ export class Simulation {
 
   clearWorkAssignment(nodeId: string, slotId: string): CommandResult<void> {
     const node = this.nodes.get(nodeId)
-    if (!node || node.type === 'rest') return { ok: false, reason: 'Рабочий слот не найден.' }
+    if (!node || node.type === 'rest' || node.type === 'hub') return { ok: false, reason: 'Рабочий слот не найден.' }
     const slot = node.slots.find((candidate) => candidate.id === slotId)
     if (!slot) return { ok: false, reason: 'Рабочий слот не найден.' }
     if (slot.catId || slot.reservedByCatId) return { ok: false, reason: 'Нельзя снять назначение с занятого слота.' }
@@ -133,7 +239,8 @@ export class Simulation {
   releaseCat(catId: string): CommandResult<void> {
     const cat = this.cats.get(catId)
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
-    if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
+    if (this.nodes.get(cat.nodeId)?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
+    if (cat.status === 'travelling' || cat.status === 'stranded') return { ok: false, reason: 'Кот уже следует к назначенной цели.' }
     if (this.nodes.get(cat.nodeId)?.type === 'rest') return { ok: false, reason: 'Кот уже отдыхает.' }
     const restSlot = this.findRestSeat()
     if (!restSlot) return { ok: false, reason: 'В комнате отдыха нет доступного кресла.' }
@@ -143,13 +250,10 @@ export class Simulation {
   connect(sourceId: string, targetId: string): CommandResult<Connection> {
     const source = this.nodes.get(sourceId)
     const target = this.nodes.get(targetId)
-    if (source?.type !== 'research' || target?.type !== 'server') {
-      return { ok: false, reason: 'Разрешена только связь: Исследования → Сервер данных.' }
-    }
+    if (source?.blocked || target?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
+    if (source?.type !== 'research' || target?.type !== 'server') return { ok: false, reason: 'Разрешена только связь: Исследования → Сервер данных.' }
     const connection = { id: `science-${sourceId}-${targetId}`, sourceId, targetId, resource: 'scienceData' as const }
-    if (this.connections.has(connection.id)) {
-      return { ok: false, reason: 'Этот канал данных уже существует.' }
-    }
+    if (this.connections.has(connection.id)) return { ok: false, reason: 'Этот канал данных уже существует.' }
     this.connections.set(connection.id, connection)
     return { ok: true, value: { ...connection } }
   }
@@ -160,24 +264,41 @@ export class Simulation {
     return { ok: true, value: undefined }
   }
 
-  connectWorkerNodes(nodeAId: string, nodeBId: string, travelSeconds: number): CommandResult<WorkerLink> {
-    if (!this.nodes.has(nodeAId) || !this.nodes.has(nodeBId)) return { ok: false, reason: 'Один из модулей не найден.' }
+  connectWorkerNodes(nodeAId: string, nodeBId: string, travelSeconds: number, nodeAPort: RoadPort = 'road', nodeBPort: RoadPort = 'road'): CommandResult<WorkerLink> {
+    const nodeA = this.nodes.get(nodeAId)
+    const nodeB = this.nodes.get(nodeBId)
+    if (!nodeA || !nodeB) return { ok: false, reason: 'Один из модулей не найден.' }
+    if (nodeA.blocked || nodeB.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
     if (nodeAId === nodeBId) return { ok: false, reason: 'Нельзя соединить модуль с самим собой.' }
     if (!Number.isFinite(travelSeconds) || travelSeconds <= 0) return { ok: false, reason: 'Время перехода должно быть положительным.' }
-    const [first, second] = [nodeAId, nodeBId].sort()
-    const id = `worker-${first}--${second}`
-    if (this.workerLinks.has(id)) return { ok: false, reason: 'Переход между этими модулями уже существует.' }
-    const link = { id, nodeAId: first, nodeBId: second, travelSeconds }
+    if (!roadPorts(nodeA.type).includes(nodeAPort) || !roadPorts(nodeB.type).includes(nodeBPort)) return { ok: false, reason: 'У выбранного модуля нет такого дорожного порта.' }
+    if (this.linksForPort(nodeAId, nodeAPort).length || this.linksForPort(nodeBId, nodeBPort).length) return { ok: false, reason: 'Этот дорожный порт уже занят.' }
+
+    const [first, second, firstPort, secondPort] = nodeAId.localeCompare(nodeBId) < 0
+      ? [nodeAId, nodeBId, nodeAPort, nodeBPort]
+      : [nodeBId, nodeAId, nodeBPort, nodeAPort]
+    const id = `worker-${first}:${firstPort}--${second}:${secondPort}`
+    if (this.workerLinks.has(id)) return { ok: false, reason: 'Переход между этими портами уже существует.' }
+    const link = { id, nodeAId: first, nodeBId: second, nodeAPort: firstPort, nodeBPort: secondPort, travelSeconds }
     this.workerLinks.set(id, link)
+    this.resumeStrandedCats()
+    this.returnRecoveredCatsToAssignedSlots()
     return { ok: true, value: { ...link } }
   }
 
   disconnectWorkerLink(linkId: string): CommandResult<void> {
     if (!this.workerLinks.has(linkId)) return { ok: false, reason: 'Переход для котов не найден.' }
-    if ([...this.cats.values()].some((cat) => cat.travel?.path.some((leg) => leg.linkId === linkId))) {
-      return { ok: false, reason: 'Нельзя отключить переход, пока по нему идёт кот.' }
+    for (const cat of this.cats.values()) {
+      if (cat.travel?.kind !== 'road' || cat.travel.leg.linkId !== linkId) continue
+      const travel = cat.travel
+      cat.nodeId = travel.leg.fromNodeId
+      cat.slotId = null
+      cat.status = 'stranded'
+      cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+      cat.travel = null
     }
     this.workerLinks.delete(linkId)
+    this.resumeStrandedCats()
     return { ok: true, value: undefined }
   }
 
@@ -195,22 +316,24 @@ export class Simulation {
     for (const cat of this.cats.values()) {
       const activeSeconds = this.advanceCat(cat, deltaSeconds)
       if (activeSeconds <= 0) continue
-      if (this.nodes.get(cat.nodeId)?.type === 'rest') {
+      const currentNode = this.nodes.get(cat.nodeId)
+      if (currentNode?.blocked) continue
+      if (currentNode?.type === 'rest') {
         if (!cat.slotId) continue
         cat.vigor = Math.min(MAX_VIGOR, cat.vigor + activeSeconds * REST_VIGOR_RECOVERY_PER_SECOND)
         continue
       }
+      if (currentNode?.type === 'hub') continue
       const workSeconds = Math.min(activeSeconds, cat.vigor / WORK_VIGOR_DRAIN_PER_SECOND)
       if (workSeconds > 0) {
         activeSecondsByNode.set(cat.nodeId, (activeSecondsByNode.get(cat.nodeId) ?? 0) + workSeconds)
         cat.vigor = Math.max(0, cat.vigor - workSeconds * WORK_VIGOR_DRAIN_PER_SECOND)
       }
-      if (cat.vigor <= EPSILON) {
-        this.returnTiredCat(cat)
-      }
+      if (cat.vigor <= EPSILON) this.returnTiredCat(cat)
     }
     this.seatWaitingCats()
     this.returnRecoveredCatsToAssignedSlots()
+    this.resumeStrandedCats()
     for (const node of this.nodes.values()) {
       node.productionRate = 0
       node.inputRate = 0
@@ -222,13 +345,13 @@ export class Simulation {
     }
     if (deltaSeconds === 0) return { ok: true, value: undefined }
     for (const server of this.nodes.values()) {
-      if (server.type !== 'server') continue
+      if (server.type !== 'server' || server.blocked) continue
       const serverWorkerSeconds = activeSecondsByNode.get(server.id) ?? 0
       let remainingCapacity = 0.5 * deltaSeconds + 0.5 * serverWorkerSeconds
       for (const connection of this.connections.values()) {
         if (connection.targetId !== server.id || remainingCapacity <= 0) continue
         const source = this.nodes.get(connection.sourceId)
-        if (!source) continue
+        if (!source || source.blocked) continue
         const transferred = Math.min(source.scienceBuffer, remainingCapacity)
         source.scienceBuffer -= transferred
         server.scienceReceived += transferred
@@ -236,12 +359,14 @@ export class Simulation {
         remainingCapacity -= transferred
       }
     }
+    this.unlockFlightIfReady()
     return { ok: true, value: undefined }
   }
 
   private startTravel(cat: Cat, targetNodeId: string, targetSlotId: string): CommandResult<void> {
-    const path = this.findPath(cat.nodeId, targetNodeId)
-    if (!path) return { ok: false, reason: 'Нет маршрута для кота. Создайте двунаправленные переходы.' }
+    if (this.nodes.get(cat.nodeId)?.blocked || this.nodes.get(targetNodeId)?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
+    const path = this.flightUnlocked ? null : this.findPath(cat.nodeId, targetNodeId)
+    if (!this.flightUnlocked && !path?.length) return { ok: false, reason: 'Нет маршрута для кота. Создайте двунаправленные переходы.' }
     const currentSlot = cat.slotId ? this.nodes.get(cat.nodeId)?.slots.find((slot) => slot.id === cat.slotId) : null
     const targetSlot = this.nodes.get(targetNodeId)?.slots.find((slot) => slot.id === targetSlotId)
     if (!targetSlot) return { ok: false, reason: 'Назначение кота повреждено.' }
@@ -249,8 +374,46 @@ export class Simulation {
     targetSlot.reservedByCatId = cat.id
     cat.slotId = null
     cat.status = 'travelling'
-    cat.travel = { targetNodeId, targetSlotId, path, legIndex: 0, legProgress: 0 }
+    cat.stranded = null
+    cat.travel = this.flightUnlocked
+      ? this.flightTravel(cat.nodeId, targetNodeId, targetSlotId, cat.nodeId, currentSlot?.id ?? null)
+      : { kind: 'road', targetNodeId, targetSlotId, sourceNodeId: cat.nodeId, leg: path![0], legProgress: 0 }
     return { ok: true, value: undefined }
+  }
+
+  private continueTravel(cat: Cat): boolean {
+    if (!cat.travel || cat.travel.kind !== 'road') return false
+    if (this.flightUnlocked) {
+      cat.travel = this.flightTravel(cat.nodeId, cat.travel.targetNodeId, cat.travel.targetSlotId, cat.travel.sourceNodeId, null)
+      return true
+    }
+    const path = this.findPath(cat.nodeId, cat.travel.targetNodeId)
+    if (!path?.length) {
+      cat.status = 'stranded'
+      cat.stranded = { targetNodeId: cat.travel.targetNodeId, targetSlotId: cat.travel.targetSlotId, sourceNodeId: cat.travel.sourceNodeId }
+      cat.travel = null
+      return false
+    }
+    cat.travel.leg = path[0]
+    cat.travel.legProgress = 0
+    return true
+  }
+
+  private resumeStrandedCats() {
+    for (const cat of this.cats.values()) {
+      if (cat.status !== 'stranded' || !cat.stranded) continue
+      if (this.flightUnlocked) {
+        cat.status = 'travelling'
+        cat.travel = this.flightTravel(cat.nodeId, cat.stranded.targetNodeId, cat.stranded.targetSlotId, cat.stranded.sourceNodeId, null)
+        cat.stranded = null
+        continue
+      }
+      const path = this.findPath(cat.nodeId, cat.stranded.targetNodeId)
+      if (!path?.length) continue
+      cat.status = 'travelling'
+      cat.travel = { ...cat.stranded, kind: 'road', leg: path[0], legProgress: 0 }
+      cat.stranded = null
+    }
   }
 
   private returnTiredCat(cat: Cat) {
@@ -269,7 +432,7 @@ export class Simulation {
 
   private findWorkAssignment(catId: string): { node: SimNode; slot: WorkSlot } | null {
     for (const node of this.nodes.values()) {
-      if (node.type === 'rest') continue
+      if (node.type === 'rest' || node.type === 'hub') continue
       const slot = node.slots.find((candidate) => candidate.assignedCatId === catId)
       if (slot) return { node, slot }
     }
@@ -285,6 +448,18 @@ export class Simulation {
     return null
   }
 
+  private findNearestRestSeat(position: Point): { node: SimNode; slot: WorkSlot } | null {
+    const candidates = [...this.nodes.values()].flatMap((node) => {
+      if (node.type !== 'rest' || node.blocked) return []
+      const nodePosition = node.position ?? { x: 0, y: 0 }
+      return node.slots
+        .filter((slot) => !slot.catId && !slot.reservedByCatId)
+        .map((slot) => ({ node, slot, distance: Math.hypot(nodePosition.x - position.x, nodePosition.y - position.y) }))
+    })
+    candidates.sort((first, second) => first.distance - second.distance || first.node.id.localeCompare(second.node.id) || first.slot.id.localeCompare(second.slot.id))
+    return candidates[0] ?? null
+  }
+
   private seatWaitingCats() {
     for (const cat of this.cats.values()) {
       if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.slotId) continue
@@ -298,14 +473,42 @@ export class Simulation {
 
   private clearWorkAssignmentForCat(catId: string) {
     for (const node of this.nodes.values()) {
-      if (node.type === 'rest') continue
+      if (node.type === 'rest' || node.type === 'hub') continue
+      for (const slot of node.slots) if (slot.assignedCatId === catId) slot.assignedCatId = null
+    }
+  }
+
+  private releaseCatOccupancyAndReservations(catId: string) {
+    for (const node of this.nodes.values()) {
       for (const slot of node.slots) {
-        if (slot.assignedCatId === catId) slot.assignedCatId = null
+        if (slot.catId === catId) slot.catId = null
+        if (slot.reservedByCatId === catId) slot.reservedByCatId = null
       }
     }
   }
 
+  private catPosition(cat: Cat): Point {
+    if (cat.travel) {
+      const fromId = cat.travel.kind === 'road' ? cat.travel.leg.fromNodeId : cat.travel.fromNodeId
+      const toId = cat.travel.kind === 'road' ? cat.travel.leg.toNodeId : cat.travel.targetNodeId
+      const progress = cat.travel.kind === 'road' ? cat.travel.legProgress : cat.travel.flightProgress
+      const from = this.nodes.get(fromId)?.position ?? { x: 0, y: 0 }
+      const to = this.nodes.get(toId)?.position ?? { x: 0, y: 0 }
+      return { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress }
+    }
+    return { ...(this.nodes.get(cat.nodeId)?.position ?? { x: 0, y: 0 }) }
+  }
+
+  private linksForNode(nodeId: string) {
+    return [...this.workerLinks.values()].filter((link) => link.nodeAId === nodeId || link.nodeBId === nodeId)
+  }
+
+  private linksForPort(nodeId: string, port: RoadPort) {
+    return this.linksForNode(nodeId).filter((link) => link.nodeAId === nodeId ? link.nodeAPort === port : link.nodeBPort === port)
+  }
+
   private findPath(startId: string, targetId: string): TravelLeg[] | null {
+    if (this.nodes.get(startId)?.blocked || this.nodes.get(targetId)?.blocked) return null
     const distances = new Map<string, number>([...this.nodes.keys()].map((id) => [id, Number.POSITIVE_INFINITY]))
     const paths = new Map<string, TravelLeg[]>()
     const visited = new Set<string>()
@@ -316,9 +519,10 @@ export class Simulation {
       if (!current || !Number.isFinite(distances.get(current)!)) break
       if (current === targetId) return paths.get(current) ?? []
       visited.add(current)
-      const adjacent = [...this.workerLinks.values()].filter((link) => link.nodeAId === current || link.nodeBId === current).sort((a, b) => a.id.localeCompare(b.id))
+      const adjacent = this.linksForNode(current).sort((a, b) => a.id.localeCompare(b.id))
       for (const link of adjacent) {
         const next = link.nodeAId === current ? link.nodeBId : link.nodeAId
+        if (this.nodes.get(next)?.blocked) continue
         if (visited.has(next)) continue
         const candidateDistance = distances.get(current)! + link.travelSeconds
         const candidatePath = [...(paths.get(current) ?? []), { linkId: link.id, fromNodeId: current, toNodeId: next }]
@@ -334,13 +538,69 @@ export class Simulation {
     return null
   }
 
+  private flightTravel(fromNodeId: string, targetNodeId: string, targetSlotId: string, sourceNodeId: string, fromSlotId: string | null) {
+    return {
+      kind: 'flight' as const,
+      fromNodeId,
+      fromSlotId,
+      targetNodeId,
+      targetSlotId,
+      sourceNodeId,
+      flightDurationSeconds: this.flightDuration(fromNodeId, targetNodeId),
+      flightProgress: 0,
+    }
+  }
+
+  private flightDuration(fromNodeId: string, targetNodeId: string) {
+    const from = this.nodes.get(fromNodeId)?.position
+    const target = this.nodes.get(targetNodeId)?.position
+    if (!from || !target) return MIN_ROAD_TRAVEL_SECONDS / 2
+    return Math.max(MIN_ROAD_TRAVEL_SECONDS / 2, Math.hypot(target.x - from.x, target.y - from.y) / (ROAD_SPEED_PIXELS_PER_SECOND * 2))
+  }
+
+  private unlockFlightIfReady() {
+    if (this.flightUnlocked || [...this.nodes.values()].reduce((total, node) => total + node.scienceReceived, 0) < FLIGHT_UNLOCK_DATA) return
+    this.flightUnlocked = true
+    this.resumeStrandedCats()
+    this.returnRecoveredCatsToAssignedSlots()
+  }
+
   private advanceCat(cat: Cat, deltaSeconds: number): number {
     if (cat.status !== 'travelling' || !cat.travel || deltaSeconds <= 0) return cat.status === 'idle' ? deltaSeconds : 0
     let remainingTime = deltaSeconds
     while (cat.travel && remainingTime > EPSILON) {
-      const leg = cat.travel.path[cat.travel.legIndex]
-      const link = leg && this.workerLinks.get(leg.linkId)
-      if (!leg || !link) return 0
+      if (cat.travel.kind === 'flight') {
+        const travel = cat.travel
+        if (this.nodes.get(travel.fromNodeId)?.blocked || this.nodes.get(travel.targetNodeId)?.blocked) {
+          cat.status = 'stranded'
+          cat.stranded = { targetNodeId: travel.targetNodeId, targetSlotId: travel.targetSlotId, sourceNodeId: travel.sourceNodeId }
+          cat.travel = null
+          return 0
+        }
+        const timeToFinish = travel.flightDurationSeconds * (1 - travel.flightProgress)
+        if (remainingTime + EPSILON < timeToFinish) {
+          travel.flightProgress += remainingTime / travel.flightDurationSeconds
+          return 0
+        }
+        remainingTime -= timeToFinish
+        cat.nodeId = travel.targetNodeId
+        const targetSlot = this.nodes.get(travel.targetNodeId)?.slots.find((slot) => slot.id === travel.targetSlotId)
+        if (!targetSlot || targetSlot.reservedByCatId !== cat.id) return 0
+        targetSlot.reservedByCatId = null
+        targetSlot.catId = cat.id
+        cat.slotId = targetSlot.id
+        cat.status = 'idle'
+        cat.travel = null
+        return remainingTime
+      }
+      const leg = cat.travel.leg
+      const link = this.workerLinks.get(leg.linkId)
+      if (!link || this.nodes.get(leg.fromNodeId)?.blocked || this.nodes.get(leg.toNodeId)?.blocked) {
+        cat.status = 'stranded'
+        cat.stranded = { targetNodeId: cat.travel.targetNodeId, targetSlotId: cat.travel.targetSlotId, sourceNodeId: cat.travel.sourceNodeId }
+        cat.travel = null
+        return 0
+      }
       const timeToFinish = link.travelSeconds * (1 - cat.travel.legProgress)
       if (remainingTime + EPSILON < timeToFinish) {
         cat.travel.legProgress += remainingTime / link.travelSeconds
@@ -348,14 +608,15 @@ export class Simulation {
       }
       remainingTime -= timeToFinish
       cat.nodeId = leg.toNodeId
-      cat.travel.legIndex += 1
       cat.travel.legProgress = 0
-      if (cat.travel.legIndex < cat.travel.path.length) continue
+      if (cat.nodeId !== cat.travel.targetNodeId) {
+        if (!this.continueTravel(cat)) return 0
+        continue
+      }
       const targetSlot = this.nodes.get(cat.travel.targetNodeId)?.slots.find((slot) => slot.id === cat.travel?.targetSlotId)
       if (!targetSlot || targetSlot.reservedByCatId !== cat.id) return 0
       targetSlot.reservedByCatId = null
       targetSlot.catId = cat.id
-      cat.nodeId = cat.travel.targetNodeId
       cat.slotId = targetSlot.id
       cat.status = 'idle'
       cat.travel = null

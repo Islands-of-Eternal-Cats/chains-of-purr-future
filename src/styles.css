@@ -45,6 +45,7 @@ button { font: inherit; }
 .hint { position: absolute; right: 21px; bottom: 30px; left: 22px; display: flex; gap: 10px; color: #698094; }
 .hint-number { color: #83cee2; font: 12px 'DM Mono', monospace; }
 .hint p { margin: 0; font-size: 10px; line-height: 1.75; }
+.flight-era-note { margin: 8px 0 12px; padding: 10px; border: 1px solid rgba(104, 229, 255, .35); color: #a6f0ff; background: rgba(30, 135, 158, .12); font: 10px 'DM Mono', monospace; line-height: 1.45; }
 
 .graph-frame { position: relative; overflow: hidden; background-color: #090f19; background-image: linear-gradient(rgba(138, 178, 199, .055) 1px, transparent 1px), linear-gradient(90deg, rgba(138, 178, 199, .055) 1px, transparent 1px), radial-gradient(circle at 45% 49%, rgba(23, 70, 92, .14), transparent 31%); background-size: 30px 30px, 30px 30px, auto; }
 .vue-flow { background: transparent; }
@@ -56,11 +57,15 @@ button { font: inherit; }
 .vue-flow__edge.selected .vue-flow__edge-path { stroke: #ffc66f; stroke-width: 3; filter: drop-shadow(0 0 7px rgba(255, 191, 82, .72)); }
 .vue-flow__edge.worker-edge .vue-flow__edge-path { stroke: #7d93a4; stroke-width: 1.5; stroke-dasharray: 5 4; filter: none; }
 .vue-flow__edge.worker-edge.selected .vue-flow__edge-path { stroke: #ffc66f; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(255, 191, 82, .62)); }
+.vue-flow__edge.flight-edge .flight-path { stroke: #c1f4ff; stroke-width: 2; stroke-dasharray: 5 7; opacity: .72; filter: drop-shadow(0 0 5px rgba(110, 224, 255, .68)); pointer-events: none; }
 .vue-flow__edge-text { fill: #9bb1c0; font: 9px 'DM Mono', monospace; }
 .worker-guide-path { fill: none; stroke: none; pointer-events: none; }
 .worker-cat-token { pointer-events: none; }
 .worker-cat-token circle { fill: #0a1923; stroke: #a5edff; stroke-width: 1.5; filter: drop-shadow(0 0 5px rgba(111, 225, 255, .7)); }
 .worker-cat-token text { fill: #c8f8ff; font: 13px 'DM Mono', monospace; text-shadow: 0 0 6px #7fe7ff; }
+.flight-cat-token { pointer-events: none; }
+.flight-cat-token circle { fill: #d9faff; stroke: #55d8f5; stroke-width: 2; filter: drop-shadow(0 0 7px rgba(91, 223, 255, .85)); }
+.flight-cat-token text { fill: #0b2631; font: 16px 'DM Mono', monospace; }
 .vue-flow__edge.animated path { stroke-dasharray: 6; animation: dashdraw .45s linear infinite; }
 .vue-flow__edge-text { fill: #d7f7ff; }
 .connection-preview { stroke: #8ceaff; stroke-width: 2px; fill: none; stroke-dasharray: 5 4; }
@@ -69,6 +74,16 @@ button { font: inherit; }
 .game-node { position: relative; overflow: visible; border: 1px solid rgba(143, 170, 185, .36); border-radius: 4px; color: #d9e4ee; background: linear-gradient(145deg, rgba(29, 41, 55, .98), rgba(12, 19, 30, .98)); box-shadow: 0 18px 40px rgba(0, 0, 0, .28), inset 0 1px rgba(207, 231, 242, .05); transition: border-color .2s, box-shadow .2s; }
 .game-node--research { border-color: rgba(86, 195, 220, .52); }
 .game-node--server { border-color: rgba(113, 146, 205, .54); }
+.game-node--blocked { border-color: rgba(255, 96, 96, .95) !important; box-shadow: 0 0 0 1px rgba(255, 111, 111, .55), 0 0 24px rgba(255, 59, 59, .52), inset 0 0 32px rgba(183, 38, 38, .24); }
+.game-node--blocked .game-handle { pointer-events: none; opacity: .45; }
+.node-blocked-message { margin: 0; padding: 7px 12px; color: #ffd4d4; background: rgba(183, 38, 38, .3); font: 700 8px/1.2 'DM Mono', monospace; letter-spacing: .06em; text-align: center; }
+.game-node--hub { min-height: 74px; display: grid; place-content: center; gap: 2px; padding: 5px; border-color: rgba(177, 190, 198, .62); text-align: center; background: radial-gradient(circle at center, rgba(105, 132, 145, .25), rgba(13, 20, 30, .96)); }
+.hub-icon { color: #d6e4e9; font: 18px/1 'DM Mono', monospace; text-shadow: 0 0 10px rgba(176, 207, 220, .56); }
+.game-node--hub strong { color: #d9e4ee; font: 700 7px/1.2 'DM Mono', monospace; letter-spacing: .08em; }
+.game-node--hub p { margin: 0; color: #8299aa; font: 7px 'DM Mono', monospace; }
+.stranded-cats { display: grid; gap: 4px; margin: 3px 16px 0; color: #ffd4d4; font: 8px/1.25 'DM Mono', monospace; }
+.game-node--hub .stranded-cats { margin: 3px 0 0; }
+.stranded-cats span { border: 1px solid rgba(255, 96, 96, .8); padding: 4px; background: rgba(183, 38, 38, .22); box-shadow: 0 0 9px rgba(255, 74, 74, .3); }
 .node-header { min-height: 79px; display: flex; align-items: center; gap: 12px; padding: 15px 17px 13px; border-bottom: 1px solid rgba(146, 177, 192, .16); }
 .node-icon { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(137, 220, 242, .28); border-radius: 2px; color: #8ceaff; background: rgba(74, 184, 215, .08); font-size: 18px; text-shadow: 0 0 13px rgba(104, 226, 255, .7); }
 .node-eyebrow { color: #6d8798; font-size: 8px; }
@@ -77,11 +92,13 @@ button { font: inherit; }
 .slot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; min-height: 76px; padding: 13px 16px; }
 .game-node--research .slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .game-node--server .slot-grid { grid-template-columns: minmax(0, 1fr); }
-.worker-slot { min-width: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; border: 1px dashed rgba(147, 174, 190, .24); border-radius: 2px; color: #60798b; background: rgba(5, 9, 15, .23); font: 9px 'DM Mono', monospace; cursor: pointer; transition: .15s ease; }
+.worker-slot { position: relative; min-width: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; border: 1px dashed rgba(147, 174, 190, .24); border-radius: 2px; color: #60798b; background: rgba(5, 9, 15, .23); font: 9px 'DM Mono', monospace; cursor: pointer; transition: .15s ease; }
 .worker-slot:hover { border-color: rgba(132, 226, 249, .64); color: #bbecf7; }
 .worker-slot--occupied { border-style: solid; border-color: rgba(107, 213, 238, .38); color: #d9f8ff; background: rgba(58, 166, 197, .11); }
 .worker-slot--reserved { border-color: rgba(255, 193, 96, .56); color: #ffd48f; background: rgba(177, 117, 32, .09); cursor: not-allowed; }
 .worker-slot--assigned { border-color: rgba(131, 218, 153, .42); color: #d3f8dc; background: rgba(68, 153, 88, .08); }
+.worker-slot--unassigned { padding-bottom: 12px; border-color: rgba(255, 193, 96, .78); color: #ffe0aa; background: rgba(177, 117, 32, .14); box-shadow: 0 0 11px rgba(255, 180, 70, .22); }
+.worker-slot--unassigned .cat-glyph { color: #ffd17e; text-shadow: 0 0 10px rgba(255, 185, 77, .48); }
 .worker-slot--exhausted, .worker-slot--unreachable { border-color: rgba(255, 96, 96, .86); color: #ffd4d4; background: rgba(183, 38, 38, .2); box-shadow: 0 0 13px rgba(255, 74, 74, .34); }
 .worker-slot--selected { outline: 1px solid #96eeff; box-shadow: 0 0 13px rgba(90, 220, 255, .28); }
 .cat-glyph { color: #a7efff; font: 700 19px/1 'DM Mono', monospace; text-shadow: 0 0 10px rgba(110, 224, 255, .65); }
@@ -92,6 +109,7 @@ button { font: inherit; }
 .cat-vigor { color: #9ee7a4; font-size: 8px; }
 .slot-state { color: #d2a65f; font-size: 7px; }
 .slot-state--warning { color: #ff8e8e; }
+.slot-state--unassigned { position: absolute; right: 4px; bottom: 3px; left: 4px; color: #ffc96b; letter-spacing: .03em; text-align: center; }
 .empty-slot-mark { color: #6b8495; font-size: 15px; }
 .rest-waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 16px 12px; color: #d2a65f; font: 8px 'DM Mono', monospace; }
 .rest-waiting > span { width: 100%; color: #9a7f51; letter-spacing: .06em; }
@@ -105,8 +123,8 @@ button { font: inherit; }
 .node-metrics .warning strong, .node-metrics .warning span { color: #ffc66f; }
 .game-handle { width: 11px; height: 11px; border: 2px solid #0b1320; border-radius: 50%; background: #79e7ff; box-shadow: 0 0 10px rgba(114, 232, 255, .92); }
 .game-handle--input { background: #9facff; }
-.game-handle--worker-input, .game-handle--worker-output { width: 9px; height: 9px; border-color: #111923; background: #9bacb9; box-shadow: 0 0 7px rgba(157, 179, 194, .58); }
-.game-handle--worker-output { background: #b8c5cf; }
+.game-handle--road { width: 9px; height: 9px; border-color: #111923; background: #9bacb9; box-shadow: 0 0 7px rgba(157, 179, 194, .58); }
+.game-handle--road-out { background: #b8c5cf; }
 
 
 .graph-status { position: absolute; z-index: 4; bottom: 20px; left: 20px; max-width: min(500px, calc(100% - 40px)); padding: 10px 13px; border: 1px solid rgba(145, 176, 190, .16); border-radius: 2px; color: #8299aa; background: rgba(7, 13, 21, .78); backdrop-filter: blur(8px); font: 10px 'DM Mono', monospace; }
