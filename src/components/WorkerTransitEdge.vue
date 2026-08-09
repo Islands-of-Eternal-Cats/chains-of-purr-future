@@ -26,7 +26,7 @@ function updateCatPoints() {
   if (!path) return
   const length = path.getTotalLength()
   catPoints.value = cats.flatMap((cat) => {
-    const leg = cat.travel?.path[cat.travel.legIndex]
+    const leg = cat.travel?.leg
     if (!leg || !cat.travel) return []
     const progress = leg.fromNodeId === props.source ? cat.travel.legProgress : 1 - cat.travel.legProgress
     const point = path.getPointAtLength(length * progress)

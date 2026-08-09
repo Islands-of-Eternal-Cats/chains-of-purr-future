@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
-import { Simulation, type Cat, type CommandResult, type NodeType, type SimNode } from './core'
+import { Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
 
 type Point = { x: number; y: number }
+type Size = { width: number; height: number }
 type SimulationSpeed = 0 | 1 | 5 | 10
 
 const simulation = new Simulation()
@@ -31,7 +32,7 @@ const positions = ref<Record<string, Point>>({
 })
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
-const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' ? [] : node.slots.flatMap((slot) => {
+const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' || node.type === 'hub' ? [] : node.slots.flatMap((slot) => {
   const cat = slot.assignedCatId ? catIndex.value[slot.assignedCatId] : undefined
   return !slot.catId
     && !slot.reservedByCatId
@@ -59,7 +60,39 @@ function defaultNodePosition(type: NodeType): Point {
   const count = snapshot.value.nodes.filter((node) => node.type === type).length
   const offset = count * 55
   if (type === 'rest') return { x: 80 + offset, y: 270 + offset }
-  return type === 'research' ? { x: 440 + offset, y: 150 + offset } : { x: 805 + offset, y: 300 + offset }
+  if (type === 'research') return { x: 440 + offset, y: 150 + offset }
+  if (type === 'server') return { x: 805 + offset, y: 300 + offset }
+  return { x: 620 + offset, y: 500 + offset }
+}
+
+function nodeSize(type: NodeType): Size {
+  return type === 'hub' ? { width: 76, height: 76 } : { width: 286, height: 220 }
+}
+
+function overlaps(first: Point, firstSize: Size, second: Point, secondSize: Size) {
+  return first.x < second.x + secondSize.width
+    && first.x + firstSize.width > second.x
+    && first.y < second.y + secondSize.height
+    && first.y + firstSize.height > second.y
+}
+
+function overlappingNodeIds() {
+  const blocked = new Set<string>()
+  for (let firstIndex = 0; firstIndex < snapshot.value.nodes.length; firstIndex += 1) {
+    const first = snapshot.value.nodes[firstIndex]
+    for (const second of snapshot.value.nodes.slice(firstIndex + 1)) {
+      if (!overlaps(nodePosition(first), nodeSize(first.type), nodePosition(second), nodeSize(second.type))) continue
+      blocked.add(first.id)
+      blocked.add(second.id)
+    }
+  }
+  return blocked
+}
+
+function syncBlockedNodes() {
+  const blockedIds = overlappingNodeIds()
+  for (const node of snapshot.value.nodes) simulation.setNodeBlocked(node.id, blockedIds.has(node.id))
+  sync()
 }
 
 const flowNodes = computed<Node[]>(() => {
@@ -67,12 +100,15 @@ const flowNodes = computed<Node[]>(() => {
     id: node.id,
     type: 'game',
     position: nodePosition(node),
+    style: { width: `${nodeSize(node.type).width}px` },
     selected: selectedModuleId.value === node.id,
     data: {
       node,
+      blocked: node.blocked,
       cats: catIndex.value,
       unreachableCatIds: unreachableCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
+      strandedCats: node.type === 'hub' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded') : [],
       selectedCatId: selectedCatId.value,
       selectedSlotId: selectedSlot.value?.slotId ?? null,
       onCatClick: selectCat,
@@ -88,13 +124,26 @@ const flowEdges = computed<Edge[]>(() => {
     type: 'smoothstep', animated: true, markerEnd: MarkerType.ArrowClosed, class: 'science-edge', selected: selectedConnection.value?.id === connection.id, data: { kind: 'science' },
   }))
   const workerEdges: Edge[] = snapshot.value.workerLinks.map((link) => ({
-    id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: 'worker-out', targetHandle: 'worker-in',
+    id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: roadHandle(link.nodeAPort), targetHandle: roadHandle(link.nodeBPort),
     type: 'workerTransit', animated: false, markerStart: MarkerType.ArrowClosed, markerEnd: MarkerType.ArrowClosed, class: 'worker-edge',
     selected: selectedConnection.value?.id === link.id, label: `${link.travelSeconds.toFixed(1)}с`,
-    data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.path[cat.travel.legIndex]?.linkId === link.id) },
+    data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.leg.linkId === link.id) },
   }))
   return [...scienceEdges, ...workerEdges]
 })
+
+const renderedEdges = ref<Edge[]>([])
+watch(flowEdges, (edges) => { renderedEdges.value = edges }, { immediate: true })
+
+function roadHandle(port: RoadPort) {
+  return port === 'road' ? 'road' : `hub-${port}`
+}
+
+function roadPort(handle: string | null | undefined): RoadPort | null {
+  if (handle === 'road') return 'road'
+  const match = handle?.match(/^hub-(north|east|south|west)$/)
+  return match?.[1] as RoadPort | undefined ?? null
+}
 
 function workerTravelSeconds(firstId: string, secondId: string) {
   const first = nodePosition(snapshot.value.nodes.find((node) => node.id === firstId)!)
@@ -119,8 +168,30 @@ function createNode(type: NodeType) {
   const result = simulation.createNode(type)
   if (result.ok) {
     positions.value[result.value.id] = defaultNodePosition(type)
+    sync()
+    syncBlockedNodes()
   }
-  report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : 'Сервер данных подключён к лаборатории.')
+  report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : type === 'server' ? 'Сервер данных подключён к лаборатории.' : 'Дорожный хаб развёрнут.')
+}
+
+function catPoint(cat: Cat): Point {
+  if (cat.travel) {
+    const from = nodePosition(snapshot.value.nodes.find((node) => node.id === cat.travel!.leg.fromNodeId)!)
+    const to = nodePosition(snapshot.value.nodes.find((node) => node.id === cat.travel!.leg.toNodeId)!)
+    return { x: from.x + (to.x - from.x) * cat.travel.legProgress, y: from.y + (to.y - from.y) * cat.travel.legProgress }
+  }
+  return nodePosition(snapshot.value.nodes.find((node) => node.id === cat.nodeId)!)
+}
+
+function rescueHubMap(hubId: string, catIds: string[]) {
+  const hubs = snapshot.value.nodes.filter((node) => node.type === 'hub' && node.id !== hubId)
+  return Object.fromEntries(catIds.flatMap((catId) => {
+    const cat = catIndex.value[catId]
+    if (!cat || !hubs.length) return []
+    const point = catPoint(cat)
+    const nearest = [...hubs].sort((first, second) => Math.hypot(point.x - nodePosition(first).x, point.y - nodePosition(first).y) - Math.hypot(point.x - nodePosition(second).x, point.y - nodePosition(second).y) || first.id.localeCompare(second.id))[0]
+    return [[catId, nearest.id]]
+  }))
 }
 
 function deleteSelectedNode() {
@@ -134,14 +205,19 @@ function deleteSelectedNode() {
       && (connection.sourceId === nodeId || connection.targetId === nodeId || connection.nodeAId === nodeId || connection.nodeBId === nodeId),
     ),
   )
-  const result = simulation.deleteNode(nodeId)
+  const selectedNode = snapshot.value.nodes.find((node) => node.id === nodeId)
+  const impact = selectedNode?.type === 'hub' ? simulation.hubDeletionImpact(nodeId) : null
+  const result = selectedNode?.type === 'hub' && impact?.ok
+    ? simulation.deleteRoadHub(nodeId, rescueHubMap(nodeId, impact.value))
+    : simulation.deleteNode(nodeId)
   if (result.ok) {
     delete positions.value[nodeId]
     if (selectedSlot.value?.nodeId === nodeId) selectedSlot.value = null
     if (removesSelectedConnection) selectedConnection.value = null
     selectedModuleId.value = null
   }
-  report(result, `${nodeName} удалён вместе со всеми связанными каналами.`)
+  report(result, selectedNode?.type === 'hub' ? `${nodeName} удалён; затронутые коты остановлены у ближайших хабов.` : `${nodeName} удалён вместе со всеми связанными каналами.`)
+  if (result.ok) syncBlockedNodes()
 }
 
 function hireCat() {
@@ -164,7 +240,7 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
 
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
-  if (cat.status === 'travelling') {
+  if (cat.status === 'travelling' || cat.status === 'stranded') {
     status.value = `${cat.name} уже находится в пути.`
     return
   }
@@ -217,8 +293,10 @@ function returnSelectedCat() {
 
 function onConnect(connection: FlowConnection) {
   if (!connection.source || !connection.target) return
-  if (connection.sourceHandle === 'worker-out' && connection.targetHandle === 'worker-in') {
-    report(simulation.connectWorkerNodes(connection.source, connection.target, workerTravelSeconds(connection.source, connection.target)), 'Двунаправленный переход для котов создан.')
+  const sourcePort = roadPort(connection.sourceHandle)
+  const targetPort = roadPort(connection.targetHandle)
+  if (sourcePort && targetPort) {
+    report(simulation.connectWorkerNodes(connection.source, connection.target, workerTravelSeconds(connection.source, connection.target), sourcePort, targetPort), 'Двунаправленный переход для котов создан.')
     return
   }
   report(simulation.connect(connection.source, connection.target), 'Канал научных данных установлен.')
@@ -235,6 +313,10 @@ function selectConnection(event: EdgeMouseEvent) {
 }
 
 function selectModule(event: NodeMouseEvent) {
+  if (event.node.data.node.blocked) {
+    status.value = `${event.node.data.node.name} перекрыт другим узлом. Переместите его, чтобы восстановить доступ.`
+    return
+  }
   const isSelected = selectedModuleId.value === event.node.id
   selectedModuleId.value = isSelected ? null : event.node.id
   status.value = isSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
@@ -248,16 +330,33 @@ function disconnectSelected() {
 }
 
 function updateNodePosition(event: NodeDragEvent) {
+  const node = snapshot.value.nodes.find((candidate) => candidate.id === event.node.id)
+  if (!node) return
   positions.value[event.node.id] = { ...event.node.position }
   for (const link of snapshot.value.workerLinks) {
     simulation.updateWorkerLinkTravelTime(link.id, workerTravelSeconds(link.nodeAId, link.nodeBId))
   }
-  sync()
+  syncBlockedNodes()
 }
 
 function isValidConnection(connection: FlowConnection) {
   if (!connection.source || !connection.target || connection.source === connection.target) return false
-  return (connection.sourceHandle === 'science-out' && connection.targetHandle === 'science-in') || (connection.sourceHandle === 'worker-out' && connection.targetHandle === 'worker-in')
+  if (connection.sourceHandle === 'science-out' && connection.targetHandle === 'science-in') return true
+  const sourcePort = roadPort(connection.sourceHandle)
+  const targetPort = roadPort(connection.targetHandle)
+  if (!sourcePort || !targetPort) return false
+  if (snapshot.value.nodes.find((node) => node.id === connection.source)?.blocked || snapshot.value.nodes.find((node) => node.id === connection.target)?.blocked) return false
+  const isExistingRoad = snapshot.value.workerLinks.some((link) =>
+    (link.nodeAId === connection.source && link.nodeAPort === sourcePort && link.nodeBId === connection.target && link.nodeBPort === targetPort)
+    || (link.nodeBId === connection.source && link.nodeBPort === sourcePort && link.nodeAId === connection.target && link.nodeAPort === targetPort),
+  )
+  if (isExistingRoad) return true
+  return !snapshot.value.workerLinks.some((link) =>
+    (link.nodeAId === connection.source && link.nodeAPort === sourcePort)
+    || (link.nodeBId === connection.source && link.nodeBPort === sourcePort)
+    || (link.nodeAId === connection.target && link.nodeAPort === targetPort)
+    || (link.nodeBId === connection.target && link.nodeBPort === targetPort),
+  )
 }
 
 function setSimulationSpeed(speed: SimulationSpeed) {
@@ -317,6 +416,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button" type="button" @click="createNode('rest')"><span>⌂</span> Добавить комнату отдыха</button>
         <button class="action-button" type="button" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
         <button class="action-button" type="button" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
+        <button class="action-button" type="button" @click="createNode('hub')"><span>◆</span> Добавить дорожный хаб</button>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
@@ -332,7 +432,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
       <section class="graph-frame" aria-label="Граф лаборатории">
         <VueFlow
           :nodes="flowNodes"
-          :edges="flowEdges"
+          :edges="renderedEdges"
           :node-types="nodeTypes"
           :edge-types="edgeTypes"
           :default-viewport="{ x: 0, y: 0, zoom: 0.92 }"
@@ -340,7 +440,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           :max-zoom="1.4"
           :fit-view-on-init="false"
           :nodes-draggable="true"
-          :connection-mode="ConnectionMode.Strict"
+          :connection-mode="ConnectionMode.Loose"
           :is-valid-connection="isValidConnection"
           @connect="onConnect"
           @edge-click="selectConnection"

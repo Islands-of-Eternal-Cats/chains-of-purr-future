@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Simulation } from './simulation'
 
-function node(simulation: Simulation, type: 'rest' | 'research' | 'server') {
+function node(simulation: Simulation, type: 'rest' | 'research' | 'server' | 'hub') {
   const result = simulation.snapshot().nodes.find((candidate) => candidate.type === type)
   if (!result) throw new Error(`Missing ${type}`)
   return result
@@ -224,18 +224,26 @@ describe('Simulation rest seating', () => {
     expect(node(simulation, 'research').scienceBuffer).toBeCloseTo(2)
   })
 
-  it('chooses the shortest multi-hop worker route with deterministic link ordering', () => {
+  it('recalculates the globally fastest remaining route at each hub', () => {
     const simulation = new Simulation()
-    const research = simulation.createNode('research')
     const server = simulation.createNode('server')
-    if (!research.ok || !server.ok) throw new Error('Missing work node')
-    simulation.connectWorkerNodes('rest-1', server.value.id, 5)
-    simulation.connectWorkerNodes('rest-1', research.value.id, 1)
-    simulation.connectWorkerNodes(research.value.id, server.value.id, 1)
+    const first = simulation.createNode('hub')
+    const slow = simulation.createNode('hub')
+    const fast = simulation.createNode('hub')
+    const destination = simulation.createNode('hub')
+    if (!server.ok || !first.ok || !slow.ok || !fast.ok || !destination.ok) throw new Error('Missing network node')
+    simulation.connectWorkerNodes('rest-1', first.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(first.value.id, slow.value.id, 1, 'north', 'west')
+    simulation.connectWorkerNodes(first.value.id, fast.value.id, 2, 'east', 'west')
+    simulation.connectWorkerNodes(slow.value.id, destination.value.id, 20, 'east', 'west')
+    simulation.connectWorkerNodes(fast.value.id, destination.value.id, 1, 'east', 'south')
+    simulation.connectWorkerNodes(destination.value.id, server.value.id, 1, 'east', 'road')
 
     expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id).ok).toBe(true)
-    expect(cat(simulation).travel?.path.map((leg) => leg.toNodeId)).toEqual([research.value.id, server.value.id])
-    simulation.tick(2)
+    expect(cat(simulation).travel?.leg.toNodeId).toBe(first.value.id)
+    simulation.tick(1)
+    expect(cat(simulation).travel?.leg.toNodeId).toBe(fast.value.id)
+    simulation.tick(4)
     expect(node(simulation, 'server').slots[0].catId).toBe('cat-1')
   })
 
@@ -243,17 +251,21 @@ describe('Simulation rest seating', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
     const server = simulation.createNode('server')
-    if (!research.ok || !server.ok) throw new Error('Missing work node')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing work node')
     simulation.connect(research.value.id, server.value.id)
-    simulation.connectWorkerNodes('rest-1', research.value.id, 1)
-    simulation.connectWorkerNodes('rest-1', server.value.id, 1)
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
     simulation.hireCat()
     simulation.tick(5)
 
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
     simulation.assignCat('cat-2', server.value.id, server.value.slots[0].id)
     simulation.tick(1)
-    simulation.tick(2)
+    simulation.tick(1)
+    simulation.tick(1)
+    simulation.tick(1)
     expect(node(simulation, 'server').inputRate).toBeCloseTo(1)
     expect(node(simulation, 'server').scienceReceived).toBeCloseTo(2)
     simulation.releaseCat('cat-2')
@@ -275,5 +287,49 @@ describe('Simulation rest seating', () => {
     simulation.tick(0.5)
     expect(node(simulation, 'research').slots[0].catId).toBe('cat-1')
     expect(simulation.disconnectWorkerLink(link.value.id).ok).toBe(true)
+  })
+
+  it('limits regular modules to one road and each hub side to one road', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing node')
+
+    expect(simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'north').ok).toBe(true)
+    expect(simulation.connectWorkerNodes('rest-1', research.value.id, 1, 'road', 'road')).toMatchObject({ ok: false })
+    expect(simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')).toMatchObject({ ok: false })
+    expect(simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'east', 'road').ok).toBe(true)
+    expect(simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'south', 'road').ok).toBe(true)
+  })
+
+  it('strands cats at a selected surviving hub and resumes them after reconnection', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const first = simulation.createNode('hub')
+    const rescue = simulation.createNode('hub')
+    if (!research.ok || !first.ok || !rescue.ok) throw new Error('Missing node')
+    simulation.connectWorkerNodes('rest-1', first.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(first.value.id, research.value.id, 2, 'east', 'road')
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
+
+    expect(simulation.deleteRoadHub(first.value.id, { 'cat-1': rescue.value.id }).ok).toBe(true)
+    expect(cat(simulation)).toMatchObject({ nodeId: rescue.value.id, status: 'stranded', stranded: { targetNodeId: research.value.id } })
+    expect(node(simulation, 'research').slots[0].reservedByCatId).toBe('cat-1')
+    simulation.connectWorkerNodes(rescue.value.id, research.value.id, 1, 'west', 'road')
+    expect(cat(simulation)).toMatchObject({ status: 'travelling', stranded: null })
+    simulation.tick(1)
+    expect(node(simulation, 'research').slots[0].catId).toBe('cat-1')
+  })
+
+  it('keeps blocked nodes out of roads, work, and route calculation', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error('Missing research')
+
+    expect(simulation.setNodeBlocked(research.value.id, true).ok).toBe(true)
+    expect(simulation.connectWorkerNodes('rest-1', research.value.id, 1)).toMatchObject({ ok: false, reason: expect.stringContaining('Перекрытый') })
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)).toMatchObject({ ok: false, reason: expect.stringContaining('Перекрытый') })
+    expect(simulation.snapshot().nodes.find((node) => node.id === research.value.id)).toMatchObject({ blocked: true })
   })
 })

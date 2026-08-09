@@ -85,4 +85,40 @@ describe('GameNode', () => {
     })
     expect(wrapper.find('.cat-route-warning').text()).toBe('!')
   })
+
+  it('renders a compact road hub and its stranded-cat warning', () => {
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'hub-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'hub-1', type: 'hub', name: 'Дорожный хаб', slots: [], scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0 },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'hub-1', slotId: null, status: 'stranded', travel: null, stranded: { targetNodeId: 'research-1', targetSlotId: 'slot-1', sourceNodeId: 'rest-1' }, vigor: 100 } },
+          restWaitingCats: [],
+          strandedCats: [{ id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'hub-1', slotId: null, status: 'stranded', travel: null, stranded: { targetNodeId: 'research-1', targetSlotId: 'slot-1', sourceNodeId: 'rest-1' }, vigor: 100 }],
+          selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+    expect(wrapper.text()).toContain('ДОРОЖНЫЙ ХАБ')
+    expect(wrapper.text()).toContain('Мира · путь недоступен')
+    expect(wrapper.findAll('handle-stub')).toHaveLength(8)
+  })
+
+  it('marks an overlapping module as blocked and disables its slots', () => {
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          blocked: true,
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null, assignedCatId: null }], scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0 },
+          cats: {}, restWaitingCats: [], selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+    expect(wrapper.find('.game-node').classes()).toContain('game-node--blocked')
+    expect(wrapper.find('.worker-slot').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('ПЕРЕКРЫТИЕ')
+  })
 })

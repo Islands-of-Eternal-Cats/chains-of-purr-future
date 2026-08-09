@@ -1,4 +1,5 @@
-export type NodeType = 'rest' | 'research' | 'server'
+export type NodeType = 'rest' | 'research' | 'server' | 'hub'
+export type RoadPort = 'road' | 'north' | 'east' | 'south' | 'west'
 
 export interface WorkSlot {
   id: string
@@ -16,9 +17,15 @@ export interface TravelLeg {
 export interface CatTravel {
   targetNodeId: string
   targetSlotId: string
-  path: TravelLeg[]
-  legIndex: number
+  sourceNodeId: string
+  leg: TravelLeg
   legProgress: number
+}
+
+export interface StrandedTravel {
+  targetNodeId: string
+  targetSlotId: string
+  sourceNodeId: string
 }
 
 export interface Cat {
@@ -27,8 +34,9 @@ export interface Cat {
   variant: string
   nodeId: string
   slotId: string | null
-  status: 'idle' | 'travelling'
+  status: 'idle' | 'travelling' | 'stranded'
   travel: CatTravel | null
+  stranded?: StrandedTravel | null
   vigor: number
 }
 
@@ -36,6 +44,7 @@ export interface SimNode {
   id: string
   type: NodeType
   name: string
+  blocked?: boolean
   slots: WorkSlot[]
   scienceBuffer: number
   scienceReceived: number
@@ -54,6 +63,8 @@ export interface WorkerLink {
   id: string
   nodeAId: string
   nodeBId: string
+  nodeAPort: RoadPort
+  nodeBPort: RoadPort
   travelSeconds: number
 }
 
