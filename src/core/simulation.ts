@@ -45,15 +45,15 @@ export class Simulation {
     }
   }
 
-  createNode(type: Exclude<NodeType, 'rest'>): CommandResult<SimNode> {
-    if ([...this.nodes.values()].some((node) => node.type === type)) {
-      return { ok: false, reason: type === 'research' ? 'Узел исследований уже создан.' : 'Сервер данных уже создан.' }
-    }
-    this.nodeCounter += 1
-    const id = `${type}-${this.nodeCounter}`
+  createNode(type: NodeType): CommandResult<SimNode> {
+    let id: string
+    do {
+      this.nodeCounter += 1
+      id = `${type}-${this.nodeCounter}`
+    } while (this.nodes.has(id))
     const node: SimNode = {
-      id, type, name: type === 'research' ? 'Исследования' : 'Сервер данных',
-      slots: slots(id, type === 'research' ? 2 : 1),
+      id, type, name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : 'Сервер данных',
+      slots: slots(id, type === 'rest' ? 3 : type === 'research' ? 2 : 1),
       scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
     }
     this.nodes.set(id, node)
@@ -111,10 +111,10 @@ export class Simulation {
     const cat = this.cats.get(catId)
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
     if (cat.status === 'travelling') return { ok: false, reason: 'Кот уже находится в пути.' }
-    if (cat.nodeId === REST_ID) return { ok: false, reason: 'Кот уже отдыхает.' }
+    if (this.nodes.get(cat.nodeId)?.type === 'rest') return { ok: false, reason: 'Кот уже отдыхает.' }
     const restSlot = this.findRestSeat()
     if (!restSlot) return { ok: false, reason: 'В комнате отдыха нет доступного кресла.' }
-    return this.startTravel(cat, REST_ID, restSlot.id)
+    return this.startTravel(cat, restSlot.node.id, restSlot.slot.id)
   }
 
   connect(sourceId: string, targetId: string): CommandResult<Connection> {
@@ -123,10 +123,10 @@ export class Simulation {
     if (source?.type !== 'research' || target?.type !== 'server') {
       return { ok: false, reason: 'Разрешена только связь: Исследования → Сервер данных.' }
     }
-    if ([...this.connections.values()].some((connection) => connection.sourceId === sourceId)) {
-      return { ok: false, reason: 'Выход исследований уже подключён.' }
-    }
     const connection = { id: `science-${sourceId}-${targetId}`, sourceId, targetId, resource: 'scienceData' as const }
+    if (this.connections.has(connection.id)) {
+      return { ok: false, reason: 'Этот канал данных уже существует.' }
+    }
     this.connections.set(connection.id, connection)
     return { ok: true, value: { ...connection } }
   }
@@ -172,7 +172,7 @@ export class Simulation {
     for (const cat of this.cats.values()) {
       const activeSeconds = this.advanceCat(cat, deltaSeconds)
       if (activeSeconds <= 0) continue
-      if (cat.nodeId === REST_ID) {
+      if (this.nodes.get(cat.nodeId)?.type === 'rest') {
         if (!cat.slotId) continue
         cat.vigor = Math.min(MAX_VIGOR, cat.vigor + activeSeconds * REST_VIGOR_RECOVERY_PER_SECOND)
         continue
@@ -197,19 +197,21 @@ export class Simulation {
         node.scienceBuffer += activeSeconds
       }
     }
-    const server = [...this.nodes.values()].find((node) => node.type === 'server')
-    if (!server || deltaSeconds === 0) return { ok: true, value: undefined }
-    const serverWorkerSeconds = activeSecondsByNode.get(server.id) ?? 0
-    let remainingCapacity = 0.5 * deltaSeconds + 0.5 * serverWorkerSeconds
-    for (const connection of this.connections.values()) {
-      if (connection.targetId !== server.id || remainingCapacity <= 0) continue
-      const source = this.nodes.get(connection.sourceId)
-      if (!source) continue
-      const transferred = Math.min(source.scienceBuffer, remainingCapacity)
-      source.scienceBuffer -= transferred
-      server.scienceReceived += transferred
-      server.inputRate += transferred / deltaSeconds
-      remainingCapacity -= transferred
+    if (deltaSeconds === 0) return { ok: true, value: undefined }
+    for (const server of this.nodes.values()) {
+      if (server.type !== 'server') continue
+      const serverWorkerSeconds = activeSecondsByNode.get(server.id) ?? 0
+      let remainingCapacity = 0.5 * deltaSeconds + 0.5 * serverWorkerSeconds
+      for (const connection of this.connections.values()) {
+        if (connection.targetId !== server.id || remainingCapacity <= 0) continue
+        const source = this.nodes.get(connection.sourceId)
+        if (!source) continue
+        const transferred = Math.min(source.scienceBuffer, remainingCapacity)
+        source.scienceBuffer -= transferred
+        server.scienceReceived += transferred
+        server.inputRate += transferred / deltaSeconds
+        remainingCapacity -= transferred
+      }
     }
     return { ok: true, value: undefined }
   }
@@ -230,12 +232,12 @@ export class Simulation {
 
   private returnTiredCat(cat: Cat) {
     const restSlot = this.findRestSeat()
-    if (restSlot) this.startTravel(cat, REST_ID, restSlot.id)
+    if (restSlot) this.startTravel(cat, restSlot.node.id, restSlot.slot.id)
   }
 
   private returnRecoveredCatsToAssignedSlots() {
     for (const cat of this.cats.values()) {
-      if (cat.status !== 'idle' || cat.nodeId !== REST_ID || cat.vigor < MAX_VIGOR - EPSILON) continue
+      if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.vigor < MAX_VIGOR - EPSILON) continue
       const assignment = this.findWorkAssignment(cat.id)
       if (!assignment || assignment.slot.catId || assignment.slot.reservedByCatId) continue
       this.startTravel(cat, assignment.node.id, assignment.slot.id)
@@ -251,19 +253,23 @@ export class Simulation {
     return null
   }
 
-  private findRestSeat(): WorkSlot | null {
-    const restSlots = this.nodes.get(REST_ID)?.slots ?? []
-    return restSlots.find((slot) => !slot.catId && !slot.reservedByCatId) ?? null
+  private findRestSeat(): { node: SimNode; slot: WorkSlot } | null {
+    for (const node of this.nodes.values()) {
+      if (node.type !== 'rest') continue
+      const slot = node.slots.find((candidate) => !candidate.catId && !candidate.reservedByCatId)
+      if (slot) return { node, slot }
+    }
+    return null
   }
 
   private seatWaitingCats() {
-    const rest = this.nodes.get(REST_ID)!
     for (const cat of this.cats.values()) {
-      if (cat.status !== 'idle' || cat.nodeId !== REST_ID || cat.slotId) continue
-      const freeSeat = rest.slots.find((slot) => !slot.catId && !slot.reservedByCatId)
-      if (!freeSeat) break
-      freeSeat.catId = cat.id
-      cat.slotId = freeSeat.id
+      if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.slotId) continue
+      const restSeat = this.findRestSeat()
+      if (!restSeat) break
+      restSeat.slot.catId = cat.id
+      cat.nodeId = restSeat.node.id
+      cat.slotId = restSeat.slot.id
     }
   }
 

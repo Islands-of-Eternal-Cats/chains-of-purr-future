@@ -22,6 +22,49 @@ function createResearch(simulation: Simulation) {
 }
 
 describe('Simulation rest seating', () => {
+  it('allows a research module to connect to multiple data servers', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const firstServer = simulation.createNode('server')
+    const secondServer = simulation.createNode('server')
+    if (!research.ok || !firstServer.ok || !secondServer.ok) throw new Error('Missing work node')
+
+    expect(simulation.connect(research.value.id, firstServer.value.id)).toMatchObject({ ok: true })
+    expect(simulation.connect(research.value.id, secondServer.value.id)).toMatchObject({ ok: true })
+    expect(simulation.snapshot().connections).toEqual([
+      expect.objectContaining({ sourceId: research.value.id, targetId: firstServer.value.id }),
+      expect.objectContaining({ sourceId: research.value.id, targetId: secondServer.value.id }),
+    ])
+    expect(simulation.connect(research.value.id, firstServer.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('уже существует') })
+  })
+
+  it('allows creating every building type more than once', () => {
+    const simulation = new Simulation()
+
+    for (const type of ['rest', 'research', 'server'] as const) {
+      expect(simulation.createNode(type).ok).toBe(true)
+      expect(simulation.createNode(type).ok).toBe(true)
+    }
+
+    expect(simulation.snapshot().nodes.filter((candidate) => candidate.type === 'rest')).toHaveLength(3)
+    expect(simulation.snapshot().nodes.filter((candidate) => candidate.type === 'research')).toHaveLength(2)
+    expect(simulation.snapshot().nodes.filter((candidate) => candidate.type === 'server')).toHaveLength(2)
+  })
+
+  it('allows creating additional rest rooms and seats waiting cats in them', () => {
+    const simulation = new Simulation()
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.hireCat()
+
+    const rest = simulation.createNode('rest')
+    if (!rest.ok) throw new Error(rest.reason)
+
+    expect(rest).toMatchObject({ ok: true, value: { type: 'rest', name: 'Комната отдыха' } })
+    simulation.tick(0)
+    expect(cat(simulation, 'cat-4')).toMatchObject({ nodeId: rest.value.id, slotId: `${rest.value.id}-slot-1` })
+  })
+
   it('starts with common seats, while new hires begin tired', () => {
     const simulation = new Simulation()
     expect(node(simulation, 'rest').slots).toHaveLength(3)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
-import { Simulation, type Cat, type CommandResult, type SimNode } from './core'
+import { Simulation, type Cat, type CommandResult, type NodeType, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
 
@@ -31,17 +31,25 @@ const positions = ref<Record<string, Point>>({
 })
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
-const hasResearch = computed(() => snapshot.value.nodes.some((node) => node.type === 'research'))
-const hasServer = computed(() => snapshot.value.nodes.some((node) => node.type === 'server'))
 const canHireCat = computed(() => true)
-const server = computed(() => snapshot.value.nodes.find((node) => node.type === 'server'))
-const totalScience = computed(() => server.value?.scienceReceived ?? 0)
+const totalScience = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.scienceReceived, 0))
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
-const canReturnSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.status === 'idle' && selectedCat.value.nodeId !== 'rest-1'))
+const canReturnSelectedCat = computed(() => Boolean(
+  selectedCat.value
+  && selectedCat.value.status === 'idle'
+  && snapshot.value.nodes.find((node) => node.id === selectedCat.value?.nodeId)?.type !== 'rest',
+))
 
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
-  return node.type === 'research' ? { x: 440, y: 150 } : { x: 805, y: 300 }
+  return defaultNodePosition(node.type)
+}
+
+function defaultNodePosition(type: NodeType): Point {
+  const count = snapshot.value.nodes.filter((node) => node.type === type).length
+  const offset = count * 55
+  if (type === 'rest') return { x: 80 + offset, y: 270 + offset }
+  return type === 'research' ? { x: 440 + offset, y: 150 + offset } : { x: 805 + offset, y: 300 + offset }
 }
 
 const flowNodes = computed<Node[]>(() => {
@@ -96,12 +104,12 @@ function report(result: CommandResult<unknown>, success: string) {
   }
 }
 
-function createNode(type: 'research' | 'server') {
+function createNode(type: NodeType) {
   const result = simulation.createNode(type)
   if (result.ok) {
-    positions.value[result.value.id] = type === 'research' ? { x: 440, y: 150 } : { x: 805, y: 300 }
+    positions.value[result.value.id] = defaultNodePosition(type)
   }
-  report(result, type === 'research' ? 'Исследовательский модуль развёрнут.' : 'Сервер данных подключён к лаборатории.')
+  report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : 'Сервер данных подключён к лаборатории.')
 }
 
 function hireCat() {
@@ -263,8 +271,9 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
     <section class="workspace">
       <aside class="control-panel">
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
-        <button class="action-button" type="button" :disabled="hasResearch" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
-        <button class="action-button" type="button" :disabled="hasServer" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
+        <button class="action-button" type="button" @click="createNode('rest')"><span>⌂</span> Добавить комнату отдыха</button>
+        <button class="action-button" type="button" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
+        <button class="action-button" type="button" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
