@@ -3,12 +3,13 @@ import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent } from '@vue-flow/core'
 import { Simulation, type Cat, type CommandResult, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
-import TravellingCat from './components/TravellingCat.vue'
+import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
 
 type Point = { x: number; y: number }
 
 const simulation = new Simulation()
-const nodeTypes = { game: markRaw(GameNode), travellingCat: markRaw(TravellingCat) }
+const nodeTypes = { game: markRaw(GameNode) }
+const edgeTypes = { workerTransit: markRaw(WorkerTransitEdge) }
 const snapshot = ref(simulation.snapshot())
 const selectedCatId = ref<string | null>(null)
 const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
@@ -40,11 +41,7 @@ const flowNodes = computed<Node[]>(() => {
     position: nodePosition(node),
     data: { node, cats: catIndex.value, selectedCatId: selectedCatId.value, selectedSlotId: selectedSlot.value?.slotId ?? null, onCatClick: selectCat, onSlotClick: handleSlotClick },
   }))
-  const catNodes: Node[] = snapshot.value.cats.filter((cat) => cat.status === 'travelling' && cat.travel).map((cat) => ({
-    id: `travelling-${cat.id}`, type: 'travellingCat', position: travellingCatPosition(cat),
-    draggable: false, selectable: false, connectable: false, zIndex: 30, data: { cat },
-  }))
-  return [...moduleNodes, ...catNodes]
+  return moduleNodes
 })
 
 const flowEdges = computed<Edge[]>(() => {
@@ -54,8 +51,9 @@ const flowEdges = computed<Edge[]>(() => {
   }))
   const workerEdges: Edge[] = snapshot.value.workerLinks.map((link) => ({
     id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: 'worker-out', targetHandle: 'worker-in',
-    type: 'straight', animated: false, markerStart: MarkerType.ArrowClosed, markerEnd: MarkerType.ArrowClosed, class: 'worker-edge',
-    selected: selectedConnection.value?.id === link.id, label: `${link.travelSeconds.toFixed(1)}с`, data: { kind: 'worker' },
+    type: 'workerTransit', animated: false, markerStart: MarkerType.ArrowClosed, markerEnd: MarkerType.ArrowClosed, class: 'worker-edge',
+    selected: selectedConnection.value?.id === link.id, label: `${link.travelSeconds.toFixed(1)}с`,
+    data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.path[cat.travel.legIndex]?.linkId === link.id) },
   }))
   return [...scienceEdges, ...workerEdges]
 })
@@ -64,15 +62,6 @@ function workerTravelSeconds(firstId: string, secondId: string) {
   const first = nodePosition(snapshot.value.nodes.find((node) => node.id === firstId)!)
   const second = nodePosition(snapshot.value.nodes.find((node) => node.id === secondId)!)
   return Math.max(0.6, Math.hypot(second.x - first.x, second.y - first.y) / 250)
-}
-
-function travellingCatPosition(cat: Cat): Point {
-  const leg = cat.travel?.path[cat.travel.legIndex]
-  if (!leg || !cat.travel) return nodePosition(snapshot.value.nodes.find((node) => node.id === cat.nodeId)!)
-  const start = nodePosition(snapshot.value.nodes.find((node) => node.id === leg.fromNodeId)!)
-  const end = nodePosition(snapshot.value.nodes.find((node) => node.id === leg.toNodeId)!)
-  const progress = cat.travel.legProgress
-  return { x: start.x + (end.x - start.x) * progress + 123, y: start.y + (end.y - start.y) * progress + 58 }
 }
 
 function sync() {
@@ -219,7 +208,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
         <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
         <div class="hint">
           <span class="hint-number">01</span>
-          <p>Стальные переходы — путь котов.<br />Циановые каналы передают данные.</p>
+          <p>Стальные дуги — путь котов.<br />Время зависит от модулей, не изгиба.<br />Циановые каналы передают данные.</p>
         </div>
       </aside>
 
@@ -228,6 +217,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           :nodes="flowNodes"
           :edges="flowEdges"
           :node-types="nodeTypes"
+          :edge-types="edgeTypes"
           :default-viewport="{ x: 0, y: 0, zoom: 0.92 }"
           :min-zoom="0.55"
           :max-zoom="1.4"

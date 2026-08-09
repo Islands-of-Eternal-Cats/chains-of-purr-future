@@ -45,6 +45,10 @@ button { font: inherit; }
 .vue-flow__edge.worker-edge .vue-flow__edge-path { stroke: #7d93a4; stroke-width: 1.5; stroke-dasharray: 5 4; filter: none; }
 .vue-flow__edge.worker-edge.selected .vue-flow__edge-path { stroke: #ffc66f; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(255, 191, 82, .62)); }
 .vue-flow__edge-text { fill: #9bb1c0; font: 9px 'DM Mono', monospace; }
+.worker-guide-path { fill: none; stroke: none; pointer-events: none; }
+.worker-cat-token { pointer-events: none; }
+.worker-cat-token circle { fill: #0a1923; stroke: #a5edff; stroke-width: 1.5; filter: drop-shadow(0 0 5px rgba(111, 225, 255, .7)); }
+.worker-cat-token text { fill: #c8f8ff; font: 13px 'DM Mono', monospace; text-shadow: 0 0 6px #7fe7ff; }
 .vue-flow__edge.animated path { stroke-dasharray: 6; animation: dashdraw .45s linear infinite; }
 .vue-flow__edge-text { fill: #d7f7ff; }
 .connection-preview { stroke: #8ceaff; stroke-width: 2px; fill: none; stroke-dasharray: 5 4; }
@@ -82,10 +86,6 @@ button { font: inherit; }
 .game-handle--worker-input, .game-handle--worker-output { width: 9px; height: 9px; border-color: #111923; background: #9bacb9; box-shadow: 0 0 7px rgba(157, 179, 194, .58); }
 .game-handle--worker-output { background: #b8c5cf; }
 
-.vue-flow__node-travellingCat { width: auto; pointer-events: none; }
-.travelling-cat { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid rgba(170, 229, 243, .7); border-radius: 10px; color: #d9faff; background: rgba(10, 25, 35, .94); box-shadow: 0 0 14px rgba(82, 205, 238, .48); font: 9px 'DM Mono', monospace; white-space: nowrap; }
-.travelling-cat span { color: #9deeff; font-size: 15px; line-height: 1; text-shadow: 0 0 10px #7fe7ff; }
-.travelling-cat small { color: #c8e8f1; font: 8px 'DM Mono', monospace; }
 
 .graph-status { position: absolute; z-index: 4; bottom: 20px; left: 20px; max-width: min(500px, calc(100% - 40px)); padding: 10px 13px; border: 1px solid rgba(145, 176, 190, .16); border-radius: 2px; color: #8299aa; background: rgba(7, 13, 21, .78); backdrop-filter: blur(8px); font: 10px 'DM Mono', monospace; }
 .graph-status--selection { color: #c7f5ff; border-color: rgba(112, 221, 246, .35); }
