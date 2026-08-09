@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent } from '@vue-flow/core'
+import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { Simulation, type Cat, type CommandResult, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
@@ -14,6 +14,7 @@ const snapshot = ref(simulation.snapshot())
 const selectedCatId = ref<string | null>(null)
 const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
 const selectedConnection = ref<{ id: string; kind: 'science' | 'worker' } | null>(null)
+const selectedModuleId = ref<string | null>(null)
 const status = ref('Создайте лабораторию и назначьте кота на исследование.')
 const positions = ref<Record<string, Point>>({
   'rest-1': { x: 80, y: 270 },
@@ -39,6 +40,7 @@ const flowNodes = computed<Node[]>(() => {
     id: node.id,
     type: 'game',
     position: nodePosition(node),
+    selected: selectedModuleId.value === node.id,
     data: { node, cats: catIndex.value, selectedCatId: selectedCatId.value, selectedSlotId: selectedSlot.value?.slotId ?? null, onCatClick: selectCat, onSlotClick: handleSlotClick },
   }))
   return moduleNodes
@@ -143,8 +145,19 @@ function onConnect(connection: FlowConnection) {
 }
 
 function selectConnection(event: EdgeMouseEvent) {
+  if (selectedConnection.value?.id === event.edge.id) {
+    selectedConnection.value = null
+    status.value = 'Выбор связи отменён.'
+    return
+  }
   selectedConnection.value = { id: event.edge.id, kind: event.edge.data?.kind === 'worker' ? 'worker' : 'science' }
   status.value = selectedConnection.value.kind === 'worker' ? 'Переход для котов выбран. Его можно отключить в панели.' : 'Канал данных выбран. Его можно отключить в панели.'
+}
+
+function selectModule(event: NodeMouseEvent) {
+  const isSelected = selectedModuleId.value === event.node.id
+  selectedModuleId.value = isSelected ? null : event.node.id
+  status.value = isSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
 }
 
 function disconnectSelected() {
@@ -227,6 +240,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           :is-valid-connection="isValidConnection"
           @connect="onConnect"
           @edge-click="selectConnection"
+          @node-click="selectModule"
           @node-drag="updateNodePosition"
           @node-drag-stop="updateNodePosition"
         >
