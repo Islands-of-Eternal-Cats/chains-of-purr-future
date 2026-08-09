@@ -8,7 +8,7 @@ interface NodeViewData {
   selectedCatId: string | null
   selectedSlotId: string | null
   onCatClick: (catId: string) => void
-  onSlotClick: (nodeId: string, slotId: string, catId: string | null) => void
+  onSlotClick: (nodeId: string, slotId: string, catId: string | null, reservedCatId: string | null) => void
 }
 
 defineProps<NodeProps<NodeViewData>>()
@@ -50,13 +50,18 @@ const nodeSubtitles = {
         v-for="slot in data.node.slots"
         :key="slot.id"
         class="worker-slot nodrag nopan"
-        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId }"
+        :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId }"
         type="button"
-        @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId)"
+        @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId)"
       >
         <template v-if="slot.catId">
           <span class="cat-glyph" aria-hidden="true">{{ data.cats[slot.catId]?.variant }}</span>
           <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
+        </template>
+        <template v-else-if="slot.reservedByCatId">
+          <span class="cat-glyph cat-glyph--travelling" aria-hidden="true">↝</span>
+          <span>{{ data.cats[slot.reservedByCatId]?.name }}</span>
+          <span class="slot-state">в пути</span>
         </template>
         <template v-else>
           <span class="empty-slot-mark">+</span>
@@ -81,11 +86,23 @@ const nodeSubtitles = {
     </footer>
 
     <Handle
+      id="worker-in"
+      class="game-handle game-handle--worker-input"
+      type="target"
+      :position="Position.Top"
+    />
+    <Handle
       v-if="data.node.type === 'research'"
       id="science-out"
       class="game-handle game-handle--output"
       type="source"
       :position="Position.Right"
+    />
+    <Handle
+      id="worker-out"
+      class="game-handle game-handle--worker-output"
+      type="source"
+      :position="Position.Bottom"
     />
   </article>
 </template>

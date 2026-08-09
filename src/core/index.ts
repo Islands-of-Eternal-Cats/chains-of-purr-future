@@ -1,2 +1,2 @@
 export { Simulation } from './simulation'
-export type { Cat, CommandResult, Connection, NodeType, SimNode, SimulationSnapshot, WorkSlot } from './types'
+export type { Cat, CatTravel, CommandResult, Connection, NodeType, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'

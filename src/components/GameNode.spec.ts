@@ -18,7 +18,7 @@ describe('GameNode', () => {
         zIndex: 0,
         events: {} as any,
         data: {
-          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null }, { id: 'slot-2', catId: null }], scienceBuffer: 1.25, scienceReceived: 0, productionRate: 1, inputRate: 0 },
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null }, { id: 'slot-2', catId: null, reservedByCatId: null }], scienceBuffer: 1.25, scienceReceived: 0, productionRate: 1, inputRate: 0 },
           cats: {},
           selectedCatId: null,
           selectedSlotId: null,
@@ -31,6 +31,6 @@ describe('GameNode', () => {
     expect(wrapper.text()).toContain('Выработка')
     expect(wrapper.text()).toContain('1.3')
     await wrapper.find('.worker-slot').trigger('click')
-    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null)
+    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null, null)
   })
 })
