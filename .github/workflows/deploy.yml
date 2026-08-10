@@ -1,0 +1,40 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main # Укажите вашу главную ветку (main или master)
+
+# Разрешаем скрипту деплоя управлять контентом Pages
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Клонируем репозиторий в виртуальную машину
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Настраиваем Node.js (рекомендуется использовать LTS версию)
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-cache: 'npm' # Ускоряет повторные сборки
+
+      # 3. Устанавливаем зависимости проекта
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Собираем проект (Vite по умолчанию складывает результат в папку dist)
+      - name: Build project
+        run: npm run build
+
+      # 5. Публикуем содержимое папки dist в ветку gh-pages
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist # Папка, которую нужно опубликовать
+          branch: gh-pages # Ветка, куда отправятся собранные файлы
