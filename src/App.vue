@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
-import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
+import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode, type UpkeepBreakdown } from './core'
 import GameNode from './components/GameNode.vue'
 import CatFlightEdge from './components/CatFlightEdge.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
-import { formatGameNumber } from './formatGameNumber'
+import { formatGameNumber, formatVigor } from './formatGameNumber'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
+type FlowCoordinateApi = { screenToFlowCoordinate: (position: Point) => Point }
 type SimulationSpeed = 0 | 1 | 5 | 10 | 100
 type SpeedOption = { value: SimulationSpeed; label: string; shortcut?: string }
 
-const SAVE_KEY = 'catmand-save-v1'
+const SAVE_KEY = 'catmand-save-v2'
 const SAVE_WARNING_KEY = 'catmand-save-warning-acknowledged'
+const appVersion = __APP_VERSION__
 let initialSaveError = ''
 let invalidStoredSave = ''
 let simulation = new Simulation()
@@ -36,6 +38,8 @@ if (typeof window !== 'undefined') {
 const nodeTypes = { game: markRaw(GameNode) }
 const edgeTypes = { workerTransit: markRaw(WorkerTransitEdge), flightTransit: markRaw(CatFlightEdge) }
 const snapshot = ref(simulation.snapshot())
+const showGoalModal = ref(snapshot.value.goal.achieved && !snapshot.value.goal.acknowledged)
+const goalContinueButton = ref<HTMLButtonElement | null>(null)
 const selectedCatId = ref<string | null>(null)
 const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
 const selectedConnection = ref<{ id: string; kind: 'data' | 'worker' } | null>(null)
@@ -43,7 +47,7 @@ const selectedModuleId = ref<string | null>(null)
 const status = ref(initialSaveError || 'Создайте лабораторию и назначьте кота на исследование.')
 const saveError = ref(initialSaveError)
 const showEarlyWarning = ref(typeof window !== 'undefined' && window.localStorage.getItem(SAVE_WARNING_KEY) !== '1')
-const simulationSpeed = ref<SimulationSpeed>(1)
+const simulationSpeed = ref<SimulationSpeed>(showGoalModal.value ? 0 : 1)
 const lastRunningSpeed = ref<Exclude<SimulationSpeed, 0>>(1)
 const diagnosticSpeedUnlocked = ref(false)
 const normalSpeedOptions: SpeedOption[] = [
@@ -54,13 +58,13 @@ const normalSpeedOptions: SpeedOption[] = [
 ]
 const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: `×${formatGameNumber(100)}` }] : normalSpeedOptions)
 const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])))
+const graphFrame = ref<HTMLElement | null>(null)
+const flowCoordinateApi = shallowRef<FlowCoordinateApi | null>(null)
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const assignedCatIds = computed(() => new Set(snapshot.value.nodes.flatMap((node) => node.slots.flatMap((slot) => slot.assignedCatId ? [slot.assignedCatId] : []))))
-const unassignedRestCatIds = computed(() => snapshot.value.cats.flatMap((cat) => {
-  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
-  return cat.status === 'idle' && cat.slotId && currentNode?.type === 'rest' && !assignedCatIds.value.has(cat.id) ? [cat.id] : []
-}))
+const unassignedCats = computed(() => snapshot.value.cats.filter((cat) => !assignedCatIds.value.has(cat.id)))
+const unassignedCatIds = computed(() => unassignedCats.value.map((cat) => cat.id))
 const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' || node.type === 'hub' ? [] : node.slots.flatMap((slot) => {
   const cat = slot.assignedCatId ? catIndex.value[slot.assignedCatId] : undefined
   return !slot.catId
@@ -74,12 +78,48 @@ const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => 
 const canHireCat = computed(() => snapshot.value.economy.credits >= GAME_BALANCE.economy.hireCatCost)
 const totalScience = computed(() => snapshot.value.scienceProgress)
 const totalData = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.dataBuffer + node.dataStored, 0))
+const netIncomePerMinute = computed(() => snapshot.value.economy.revenuePerMinute - snapshot.value.economy.upkeepPerMinute)
+const scienceGoalComplete = computed(() => snapshot.value.flightUnlocked)
+const flightResearchProgress = computed(() => Math.min(totalScience.value / GAME_BALANCE.science.flightUnlockProgress * 100, 100))
+const salesGoalComplete = computed(() => snapshot.value.economy.totalDataSold >= GAME_BALANCE.objective.dataSoldTarget)
+const economyGoalComplete = computed(() => netIncomePerMinute.value >= 0)
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
 const canDismissSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.id !== 'cat-1'))
+
+type ExpenseKey = keyof UpkeepBreakdown
+const expenseDefinitions: Array<{ key: ExpenseKey; label: string }> = [
+  { key: 'rest', label: 'Комнаты отдыха' },
+  { key: 'research', label: 'Исследования' },
+  { key: 'server', label: 'Серверы' },
+  { key: 'hub', label: 'Дорожные хабы' },
+  { key: 'terminal', label: 'Торговые терминалы' },
+  { key: 'cats', label: 'Коты' },
+]
+const expenseSegments = computed(() => expenseDefinitions.flatMap(({ key, label }) => {
+  const value = snapshot.value.economy.upkeepBreakdown[key]
+  if (value <= 0) return []
+  const total = snapshot.value.economy.upkeepPerMinute
+  return [{ key, label, value, percentage: total > 0 ? value / total * 100 : 0 }]
+}))
+const expenseAriaLabel = computed(() => `Расходы ${formatGameNumber(snapshot.value.economy.upkeepPerMinute)} в минуту. ${expenseSegments.value.map((segment) => `${segment.label}: ${formatGameNumber(segment.value)}`).join('. ')}`)
+
+function formatSignedGameNumber(value: number) {
+  const normalized = Math.abs(value) < 0.000001 ? 0 : value
+  return `${normalized > 0 ? '+' : ''}${formatGameNumber(normalized)}`
+}
 
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
   return node.position && (node.position.x || node.position.y) ? node.position : defaultNodePosition(node.type)
+}
+
+function unassignedCatState(cat: Cat) {
+  if (cat.status === 'stranded') return 'путь недоступен'
+  if (cat.status === 'travelling') return 'в пути'
+  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
+  if (currentNode?.type !== 'rest') return 'без работы'
+  if (!cat.slotId) return 'ждёт кресло'
+  return cat.vigor >= GAME_BALANCE.cats.maxVigor ? 'готов к работе' : 'восстанавливается'
 }
 
 function defaultNodePosition(type: NodeType): Point {
@@ -94,6 +134,21 @@ function defaultNodePosition(type: NodeType): Point {
 
 function nodeSize(type: NodeType): Size {
   return type === 'hub' ? { width: 76, height: 76 } : { width: 286, height: 220 }
+}
+
+function handleFlowInit(api: FlowCoordinateApi) {
+  flowCoordinateApi.value = api
+}
+
+function centeredNodePosition(type: NodeType): Point {
+  const bounds = graphFrame.value?.getBoundingClientRect()
+  if (!bounds || !flowCoordinateApi.value) return defaultNodePosition(type)
+  const center = flowCoordinateApi.value.screenToFlowCoordinate({
+    x: bounds.left + bounds.width / 2,
+    y: bounds.top + bounds.height / 2,
+  })
+  const size = nodeSize(type)
+  return { x: center.x - size.width / 2, y: center.y - size.height / 2 }
 }
 
 function overlaps(first: Point, firstSize: Size, second: Point, secondSize: Size) {
@@ -134,7 +189,7 @@ const flowNodes = computed<Node[]>(() => {
       blocked: node.blocked,
       cats: catIndex.value,
       unreachableCatIds: unreachableCatIds.value,
-      unassignedRestCatIds: unassignedRestCatIds.value,
+      unassignedCatIds: unassignedCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
       strandedCats: snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded'),
       selectedCatId: selectedCatId.value,
@@ -249,7 +304,7 @@ function report(result: CommandResult<unknown>, success: string) {
 function createNode(type: NodeType) {
   const result = simulation.createNode(type)
   if (result.ok) {
-    positions.value[result.value.id] = defaultNodePosition(type)
+    positions.value[result.value.id] = centeredNodePosition(type)
     simulation.setNodePosition(result.value.id, positions.value[result.value.id])
     sync()
     syncBlockedNodes()
@@ -504,12 +559,14 @@ function isValidConnection(connection: FlowConnection) {
 }
 
 function setSimulationSpeed(speed: SimulationSpeed) {
+  if (showGoalModal.value) return
   simulationSpeed.value = speed
   if (speed !== 0) lastRunningSpeed.value = speed
   status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${formatGameNumber(speed)}.`
 }
 
 function handleKeyboardShortcuts(event: KeyboardEvent) {
+  if (showGoalModal.value) return
   cancelCatSelection(event)
   if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
   const target = event.target
@@ -542,7 +599,7 @@ function downloadText(contents: string, filename: string) {
 }
 
 function exportGame() {
-  downloadText(JSON.stringify(simulation.exportSave(), null, 2), 'catmand-save-v1.json')
+  downloadText(JSON.stringify(simulation.exportSave(), null, 2), 'catmand-save-v2.json')
   status.value = 'Сохранение выгружено в JSON.'
 }
 
@@ -556,9 +613,33 @@ function resetTransientState() {
   selectedSlot.value = null
   selectedConnection.value = null
   selectedModuleId.value = null
+  const restoredSnapshot = simulation.snapshot()
+  showGoalModal.value = restoredSnapshot.goal.achieved && !restoredSnapshot.goal.acknowledged
+  simulationSpeed.value = showGoalModal.value ? 0 : 1
+  lastRunningSpeed.value = 1
+  positions.value = Object.fromEntries(restoredSnapshot.nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }]))
+  if (showGoalModal.value) void nextTick(() => goalContinueButton.value?.focus())
+}
+
+function openGoalModal() {
+  showGoalModal.value = true
+  simulationSpeed.value = 0
+  lastRunningSpeed.value = 1
+  void nextTick(() => goalContinueButton.value?.focus())
+}
+
+function continueAfterGoal() {
+  const result = simulation.acknowledgeGoal()
+  if (!result.ok) {
+    status.value = result.reason
+    return
+  }
+  showGoalModal.value = false
   simulationSpeed.value = 1
   lastRunningSpeed.value = 1
-  positions.value = Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }]))
+  sync()
+  saveLocalNow()
+  status.value = 'Цель PoC достигнута. Лаборатория продолжает работу в режиме песочницы.'
 }
 
 async function importGame(event: Event) {
@@ -611,17 +692,33 @@ function acknowledgeEarlyWarning() {
 
 let frame = 0
 let previousTime = 0
+const MAX_SIMULATION_STEP_SECONDS = 0.1
+
+function advanceSimulation(deltaSeconds: number) {
+  let remainingSeconds = deltaSeconds
+  while (remainingSeconds > 0.000000001) {
+    const stepSeconds = Math.min(remainingSeconds, MAX_SIMULATION_STEP_SECONDS)
+    simulation.tick(stepSeconds)
+    remainingSeconds -= stepSeconds
+  }
+}
+
 function animate(time: number) {
   const elapsed = previousTime ? Math.min((time - previousTime) / 1000, 0.25) : 0
   previousTime = time
   const delta = elapsed * simulationSpeed.value
   if (delta > 0) {
     const wasFlightUnlocked = snapshot.value.flightUnlocked
+    const wasGoalAchieved = snapshot.value.goal.achieved
     const travellingCats = new Set(snapshot.value.cats.filter((cat) => cat.status === 'travelling').map((cat) => cat.id))
-    simulation.tick(delta)
+    advanceSimulation(delta)
     sync()
     const arrivedCat = snapshot.value.cats.find((cat) => travellingCats.has(cat.id) && cat.status === 'idle')
-    if (!wasFlightUnlocked && snapshot.value.flightUnlocked) {
+    if (!wasGoalAchieved && snapshot.value.goal.achieved) {
+      openGoalModal()
+      status.value = 'Цель достигнута: лаборатория перешла в автономный режим.'
+    }
+    else if (!wasFlightUnlocked && snapshot.value.flightUnlocked) {
       simulationSpeed.value = 1
       lastRunningSpeed.value = 1
       status.value = `Научный прорыв: коты получили возможность летать напрямую между модулями. Скорость снижена до ×${formatGameNumber(1)}.`
@@ -633,6 +730,7 @@ function animate(time: number) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeyboardShortcuts)
+  if (showGoalModal.value) void nextTick(() => goalContinueButton.value?.focus())
   frame = requestAnimationFrame(animate)
 })
 onBeforeUnmount(() => {
@@ -645,6 +743,18 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell" @contextmenu.prevent>
+    <div v-if="showGoalModal" class="goal-modal-backdrop">
+      <section class="goal-modal" role="dialog" aria-modal="true" aria-labelledby="goal-modal-title" aria-describedby="goal-modal-description">
+        <span class="goal-modal__mark" aria-hidden="true">✦</span>
+        <p>ЦЕЛЬ ДОСТИГНУТА</p>
+        <h2 id="goal-modal-title">АВТОНОМНАЯ ЛАБОРАТОРИЯ</h2>
+        <div id="goal-modal-description">
+          <p>Воздушная эра открыта, первый контракт выполнен, а торговля покрывает содержание сети.</p>
+          <p>Испытание PoC завершено — лабораторию можно развивать дальше.</p>
+        </div>
+        <button ref="goalContinueButton" type="button" @click="continueAfterGoal">Продолжить играть</button>
+      </section>
+    </div>
     <div v-if="showEarlyWarning" class="early-warning">
       <span>РАННЯЯ РАЗРАБОТКА · сохранения могут стать несовместимыми с будущими версиями.</span>
       <button type="button" @click="acknowledgeEarlyWarning">Понятно</button>
@@ -657,7 +767,7 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <div class="brand">
         <button class="brand-mark" type="button" aria-label="Логотип лаборатории" @click="unlockDiagnosticSpeed">✦</button>
-        <div><p>PURRFECT / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
+        <div><p>PURRFECT / SECTOR 07 <span class="app-version">v{{ appVersion }}</span></p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
       </div>
       <div class="topbar-actions">
         <div class="speed-control" aria-label="Скорость симуляции">
@@ -679,26 +789,112 @@ onBeforeUnmount(() => {
         <div class="science-readout"><span>НАУКА / ДАННЫЕ</span><strong>{{ formatGameNumber(totalScience) }}</strong><em>/ {{ formatGameNumber(totalData) }}</em></div>
         <div class="economy-readout" :class="{ 'economy-readout--debt': snapshot.economy.credits < 0 }">
           <span>КРЕДИТЫ</span><strong>{{ formatGameNumber(snapshot.economy.credits) }}</strong>
-          <em>{{ formatGameNumber(snapshot.economy.revenuePerMinute - snapshot.economy.upkeepPerMinute) }}/мин</em>
+          <em>{{ formatSignedGameNumber(netIncomePerMinute) }}/мин</em>
+          <div class="expense-visualization">
+            <span class="expense-label">РАСХОДЫ / МИН</span>
+            <div class="expense-line">
+              <div class="expense-bar" role="group" :aria-label="expenseAriaLabel">
+                <span
+                  v-for="segment in expenseSegments"
+                  :key="segment.key"
+                  class="expense-segment"
+                  :class="`expense-segment--${segment.key}`"
+                  :style="{ width: `${segment.percentage}%` }"
+                  role="img"
+                  :aria-label="`${segment.label}: ${formatGameNumber(segment.value)} в минуту`"
+                  :title="`${segment.label}: ${formatGameNumber(segment.value)}/мин`"
+                ></span>
+              </div>
+              <small>−{{ formatGameNumber(snapshot.economy.upkeepPerMinute) }}</small>
+            </div>
+          </div>
         </div>
       </div>
     </header>
 
     <section class="workspace">
       <aside class="control-panel">
+        <section
+          class="research-project"
+          :class="{ 'research-project--complete': snapshot.flightUnlocked }"
+          aria-labelledby="flight-research-title"
+        >
+          <div class="research-project__eyebrow">
+            <span>ИССЛЕДОВАТЕЛЬСКИЙ ПРОЕКТ</span>
+            <span>{{ snapshot.flightUnlocked ? 'ЗАВЕРШЁН' : 'В РАБОТЕ' }}</span>
+          </div>
+          <div class="research-project__title">
+            <span aria-hidden="true">✦</span>
+            <strong id="flight-research-title">ВОЗДУШНАЯ ЭРА</strong>
+          </div>
+          <div
+            class="research-project__progress"
+            role="progressbar"
+            aria-label="Прогресс исследования Воздушная эра"
+            :aria-valuenow="Math.min(totalScience, GAME_BALANCE.science.flightUnlockProgress)"
+            aria-valuemin="0"
+            :aria-valuemax="GAME_BALANCE.science.flightUnlockProgress"
+          >
+            <span :style="{ width: `${flightResearchProgress}%` }"></span>
+          </div>
+          <div class="research-project__value">
+            <strong>{{ formatGameNumber(Math.min(totalScience, GAME_BALANCE.science.flightUnlockProgress)) }} / {{ formatGameNumber(GAME_BALANCE.science.flightUnlockProgress) }}</strong>
+            <span>НАУКИ</span>
+          </div>
+          <p v-if="snapshot.flightUnlocked">Коты могут летать напрямую между модулями.</p>
+          <p v-else>Назначайте котов в исследовательские модули, чтобы приблизить научный прорыв.</p>
+        </section>
+        <section class="objective-card" :class="{ 'objective-card--achieved': snapshot.goal.achieved }" aria-labelledby="objective-title">
+          <div class="objective-card__heading">
+            <span>ЦЕЛЬ PoC</span>
+            <strong id="objective-title">АВТОНОМНАЯ ЛАБОРАТОРИЯ</strong>
+          </div>
+          <div class="objective-condition" :class="{ 'objective-condition--complete': scienceGoalComplete }">
+            <span aria-hidden="true">{{ scienceGoalComplete ? '✓' : '○' }}</span>
+            <div><small>ВОЗДУШНАЯ ЭРА</small><strong>{{ scienceGoalComplete ? 'ЗАВЕРШЕНА' : 'ИССЛЕДУЕТСЯ' }}</strong></div>
+          </div>
+          <div class="objective-condition" :class="{ 'objective-condition--complete': salesGoalComplete }">
+            <span aria-hidden="true">{{ salesGoalComplete ? '✓' : '○' }}</span>
+            <div><small>ПЕРВЫЙ КОНТРАКТ</small><strong>{{ formatGameNumber(Math.min(snapshot.economy.totalDataSold, GAME_BALANCE.objective.dataSoldTarget)) }} / {{ formatGameNumber(GAME_BALANCE.objective.dataSoldTarget) }} данных</strong></div>
+          </div>
+          <div class="objective-condition" :class="{ 'objective-condition--complete': snapshot.goal.achieved || economyGoalComplete }">
+            <span aria-hidden="true">{{ snapshot.goal.achieved || economyGoalComplete ? '✓' : '○' }}</span>
+            <div><small>САМООКУПАЕМОСТЬ</small><strong>{{ formatSignedGameNumber(netIncomePerMinute) }}/мин</strong></div>
+          </div>
+          <p v-if="snapshot.goal.acknowledged" class="objective-card__sandbox">ЦЕЛЬ ДОСТИГНУТА · ПЕСОЧНИЦА ПРОДОЛЖАЕТСЯ</p>
+        </section>
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.rest.cost" @click="createNode('rest')"><span>⌂</span> Комната отдыха · {{ formatGameNumber(GAME_BALANCE.nodes.rest.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.research.cost" @click="createNode('research')"><span>✦</span> Исследования · {{ formatGameNumber(GAME_BALANCE.nodes.research.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.server.cost" @click="createNode('server')"><span>▦</span> Сервер · {{ formatGameNumber(GAME_BALANCE.nodes.server.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.terminal.cost" @click="createNode('terminal')"><span>₡</span> Торговый терминал · {{ formatGameNumber(GAME_BALANCE.nodes.terminal.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.hub.cost" @click="createNode('hub')"><span>◆</span> Дорожный хаб · {{ formatGameNumber(GAME_BALANCE.nodes.hub.cost) }}</button>
-        <p v-if="snapshot.flightUnlocked" class="flight-era-note">✦ ВОЗДУШНАЯ ЭРА · коты летают напрямую</p>
         <p v-if="snapshot.economy.debtWarning" class="debt-warning">ЛАБОРАТОРИЯ ЗАКРЫТА · ранний доступ позволяет продолжить восстановление.</p>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
         <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ formatGameNumber(GAME_BALANCE.economy.hireCatCost) }}</button>
+        <section class="crew-roster-section" aria-label="Коты без работы">
+          <div class="crew-roster-heading"><span>БЕЗ РАБОТЫ</span><strong>{{ unassignedCats.length }}</strong></div>
+          <div v-if="unassignedCats.length" class="crew-roster-list">
+            <button
+              v-for="cat in unassignedCats"
+              :key="cat.id"
+              class="crew-cat-button"
+              :class="{ 'crew-cat-button--selected': selectedCatId === cat.id }"
+              type="button"
+              :aria-pressed="selectedCatId === cat.id"
+              :title="`Выбрать ${cat.name} для назначения на работу`"
+              @click="selectCat(cat.id)"
+            >
+              <span class="crew-cat-glyph" aria-hidden="true">{{ cat.variant }}</span>
+              <span class="crew-cat-details"><strong>{{ cat.name }}</strong><small>{{ unassignedCatState(cat) }}</small></span>
+              <span class="crew-cat-vigor" title="Бодрость">{{ formatVigor(cat.vigor) }}</span>
+            </button>
+          </div>
+          <p v-else class="crew-roster-empty">ВСЕ КОТЫ НАЗНАЧЕНЫ</p>
+        </section>
         <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ formatGameNumber(GAME_BALANCE.economy.dismissCatCost) }}</button>
         <div class="panel-rule"></div>
         <p class="panel-label">СОХРАНЕНИЕ</p>
@@ -712,7 +908,7 @@ onBeforeUnmount(() => {
         </div>
       </aside>
 
-      <section class="graph-frame" aria-label="Граф лаборатории">
+      <section ref="graphFrame" class="graph-frame" aria-label="Граф лаборатории">
         <VueFlow
           :nodes="flowNodes"
           :edges="renderedEdges"
@@ -725,6 +921,7 @@ onBeforeUnmount(() => {
           :nodes-draggable="true"
           :connection-mode="ConnectionMode.Loose"
           :is-valid-connection="isValidConnection"
+          @init="handleFlowInit"
           @connect="onConnect"
           @edge-click="selectConnection"
           @node-click="selectModule"

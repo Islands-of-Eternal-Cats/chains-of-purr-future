@@ -52,7 +52,7 @@ describe('GameNode', () => {
             'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'rest-1', slotId: 'rest-1-slot-1', status: 'idle', travel: null, vigor: 100 },
             'cat-2': { id: 'cat-2', name: 'Нокс', variant: '◔', nodeId: 'rest-1', slotId: 'rest-1-slot-2', status: 'idle', travel: null, vigor: 50 },
           },
-          unassignedRestCatIds: ['cat-1'],
+          unassignedCatIds: ['cat-1'],
           restWaitingCats: [],
           selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
         },

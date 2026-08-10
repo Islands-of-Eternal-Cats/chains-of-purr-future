@@ -1,11 +1,11 @@
 import { GAME_BALANCE } from './balance'
-import type { Cat, CommandResult, Connection, GameSaveV1, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, SimulationStateV1, TravelLeg, WorkerLink, WorkSlot } from './types'
+import type { Cat, CommandResult, Connection, GameSaveV2, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, SimulationStateV2, TravelLeg, UpkeepBreakdown, WorkerLink, WorkSlot } from './types'
 
 const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
 const CAT_VARIANTS = ['◕', '◔', '◑', '◒', '◐']
 const EPSILON = 0.000001
-const SAVE_VERSION = 1
+const SAVE_VERSION = 2
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
   return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
@@ -94,7 +94,10 @@ export class Simulation {
   private credits: number = GAME_BALANCE.economy.startingCredits
   private totalEarned = 0
   private totalSpent = 0
+  private totalDataSold = 0
   private lastRevenuePerMinute = 0
+  private goalAchieved = false
+  private goalAcknowledged = false
 
   constructor(initialize = true) {
     if (!initialize) return
@@ -108,6 +111,7 @@ export class Simulation {
   }
 
   snapshot(): SimulationSnapshot {
+    const upkeepBreakdown = this.upkeepBreakdown()
     return {
       nodes: [...this.nodes.values()].map(copyNode),
       cats: [...this.cats.values()].map(copyCat),
@@ -119,14 +123,17 @@ export class Simulation {
         credits: this.credits,
         totalEarned: this.totalEarned,
         totalSpent: this.totalSpent,
-        upkeepPerMinute: this.upkeepPerMinute(),
+        totalDataSold: this.totalDataSold,
+        upkeepPerMinute: this.totalUpkeep(upkeepBreakdown),
+        upkeepBreakdown,
         revenuePerMinute: this.lastRevenuePerMinute,
         debtWarning: this.credits <= GAME_BALANCE.economy.debtWarningThreshold,
       },
+      goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged },
     }
   }
 
-  exportSave(): GameSaveV1 {
+  exportSave(): GameSaveV2 {
     const snapshot = this.snapshot()
     return {
       version: SAVE_VERSION,
@@ -139,7 +146,8 @@ export class Simulation {
         catCounter: this.catCounter,
         flightUnlocked: this.flightUnlocked,
         scienceProgress: this.scienceProgress,
-        economy: { credits: this.credits, totalEarned: this.totalEarned, totalSpent: this.totalSpent },
+        economy: { credits: this.credits, totalEarned: this.totalEarned, totalSpent: this.totalSpent, totalDataSold: this.totalDataSold },
+        goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged },
       },
     }
   }
@@ -156,13 +164,21 @@ export class Simulation {
       || typeof state.flightUnlocked !== 'boolean' || !isFiniteNumber(state.scienceProgress) || state.scienceProgress < 0
       || !isRecord(state.economy) || !isFiniteNumber(state.economy.credits)
       || !isFiniteNumber(state.economy.totalEarned) || state.economy.totalEarned < 0
-      || !isFiniteNumber(state.economy.totalSpent) || state.economy.totalSpent < 0) {
+      || !isFiniteNumber(state.economy.totalSpent) || state.economy.totalSpent < 0
+      || !isFiniteNumber(state.economy.totalDataSold) || state.economy.totalDataSold < 0
+      || !isRecord(state.goal) || typeof state.goal.achieved !== 'boolean' || typeof state.goal.acknowledged !== 'boolean') {
       return { ok: false, reason: 'Сохранение повреждено или имеет неверную структуру.' }
     }
     const loaded = new Simulation(false)
-    const typedState = state as unknown as SimulationStateV1
+    const typedState = state as unknown as SimulationStateV2
     if (!loaded.restoreState(typedState)) return { ok: false, reason: 'Сохранение содержит повреждённые ссылки или топологию.' }
     return { ok: true, value: loaded }
+  }
+
+  acknowledgeGoal(): CommandResult<void> {
+    if (!this.goalAchieved) return { ok: false, reason: 'Цель лаборатории ещё не достигнута.' }
+    this.goalAcknowledged = true
+    return { ok: true, value: undefined }
   }
 
   createNode(type: NodeType): CommandResult<SimNode> {
@@ -563,6 +579,7 @@ export class Simulation {
       server.inputRate = transferred / deltaSeconds
     }
     let revenue = 0
+    let dataSold = 0
     for (const terminal of this.nodes.values()) {
       if (terminal.type !== 'terminal' || terminal.blocked) continue
       const operatorSeconds = activeSecondsByNode.get(terminal.id) ?? 0
@@ -571,14 +588,17 @@ export class Simulation {
       const sold = this.pullData(terminal.id, capacity, deltaSeconds)
       terminal.dataSold += sold
       terminal.inputRate = sold / deltaSeconds
+      dataSold += sold
       revenue += sold * GAME_BALANCE.economy.dataSalePrice
     }
     const upkeep = this.upkeepPerMinute() * deltaSeconds / 60
     this.credits += revenue - upkeep
     this.totalEarned += revenue
     this.totalSpent += upkeep
+    this.totalDataSold += dataSold
     this.lastRevenuePerMinute = revenue / deltaSeconds * 60
     this.unlockFlightIfReady()
+    this.unlockGoalIfReady()
     return { ok: true, value: undefined }
   }
 
@@ -811,12 +831,22 @@ export class Simulation {
     return this.linksForNode(nodeId).filter((link) => link.nodeAId === nodeId ? link.nodeAPort === port : link.nodeBPort === port)
   }
 
-  private upkeepPerMinute() {
-    const nodeUpkeep = [...this.nodes.values()].reduce((total, node) => total + GAME_BALANCE.nodes[node.type].upkeepPerMinute, 0)
-    return nodeUpkeep + this.cats.size * GAME_BALANCE.economy.catUpkeepPerMinute
+  private upkeepBreakdown(): UpkeepBreakdown {
+    const breakdown: UpkeepBreakdown = { rest: 0, research: 0, server: 0, hub: 0, terminal: 0, cats: 0 }
+    for (const node of this.nodes.values()) breakdown[node.type] += GAME_BALANCE.nodes[node.type].upkeepPerMinute
+    breakdown.cats = this.cats.size * GAME_BALANCE.economy.catUpkeepPerMinute
+    return breakdown
   }
 
-  private restoreState(state: SimulationStateV1) {
+  private totalUpkeep(breakdown: UpkeepBreakdown) {
+    return Object.values(breakdown).reduce((total, value) => total + value, 0)
+  }
+
+  private upkeepPerMinute() {
+    return this.totalUpkeep(this.upkeepBreakdown())
+  }
+
+  private restoreState(state: SimulationStateV2) {
     if (!state.nodes.some((node) => node.id === REST_ID && node.type === 'rest')) return false
     const nodeIds = new Set<string>()
     const slotIds = new Set<string>()
@@ -899,6 +929,13 @@ export class Simulation {
     this.credits = state.economy.credits
     this.totalEarned = state.economy.totalEarned
     this.totalSpent = state.economy.totalSpent
+    this.totalDataSold = state.economy.totalDataSold
+    const terminalSales = [...this.nodes.values()].reduce((total, node) => total + node.dataSold, 0)
+    if (this.totalDataSold + EPSILON < terminalSales) return false
+    this.goalAchieved = state.goal.achieved
+    this.goalAcknowledged = state.goal.acknowledged
+    if (this.goalAcknowledged && !this.goalAchieved) return false
+    if (this.goalAchieved && (!this.flightUnlocked || this.totalDataSold + EPSILON < GAME_BALANCE.objective.dataSoldTarget)) return false
     this.lastRevenuePerMinute = 0
     return true
   }
@@ -906,6 +943,13 @@ export class Simulation {
   private spend(amount: number) {
     this.credits -= amount
     this.totalSpent += amount
+  }
+
+  private unlockGoalIfReady() {
+    if (this.goalAchieved || !this.flightUnlocked) return
+    if (this.totalDataSold + EPSILON < GAME_BALANCE.objective.dataSoldTarget) return
+    if (this.lastRevenuePerMinute + EPSILON < this.upkeepPerMinute()) return
+    this.goalAchieved = true
   }
 
   private sourceData(node: SimNode) {
