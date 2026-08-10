@@ -129,6 +129,7 @@ button { font: inherit; }
 .rest-waiting__cat { border: 1px dashed rgba(210, 166, 95, .42); border-radius: 2px; padding: 4px 6px; color: #f4d59b; background: rgba(106, 75, 26, .13); font: inherit; cursor: pointer; }
 .rest-waiting__cat:hover { border-color: rgba(255, 205, 112, .8); }
 .node-metrics { display: grid; grid-template-columns: 1fr 1fr; padding: 10px 16px 12px; border-top: 1px solid rgba(146, 177, 192, .12); background: rgba(3, 8, 13, .22); }
+.node-metrics--single { grid-template-columns: 1fr; }
 .node-metrics > div + div { padding-left: 13px; border-left: 1px solid rgba(146, 177, 192, .13); }
 .node-metrics span { display: block; margin-bottom: 4px; color: #6e8292; font: 8px 'DM Mono', monospace; letter-spacing: .06em; }
 .node-metrics strong { color: #bdeafa; font: 600 14px/1 'DM Mono', monospace; }

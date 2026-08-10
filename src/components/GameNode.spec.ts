@@ -245,7 +245,7 @@ describe('GameNode', () => {
     expect(wrapper.text()).toContain('ПЕРЕКРЫТИЕ')
   })
 
-  it('renders a trade terminal with one data input and sale metrics', () => {
+  it('renders a trade terminal with one data input and only the current sale rate', () => {
     const wrapper = mount(GameNode, {
       props: {
         id: 'terminal-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
@@ -263,7 +263,10 @@ describe('GameNode', () => {
 
     expect(wrapper.text()).toContain('Торговый терминал')
     expect(wrapper.text()).toContain('Продажа')
-    expect(wrapper.text()).toContain('12.5')
+    expect(wrapper.text()).toContain('0.3')
+    expect(wrapper.text()).not.toContain('Продано')
+    expect(wrapper.text()).not.toContain('12.5')
+    expect(wrapper.find('.node-metrics').classes()).toContain('node-metrics--single')
     expect(wrapper.findAll('handle-stub')).toHaveLength(3)
   })
 })

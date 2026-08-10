@@ -158,10 +158,10 @@ const nodeSubtitles = {
         </button>
       </section>
 
-      <footer class="node-metrics">
+      <footer class="node-metrics" :class="{ 'node-metrics--single': data.node.type === 'terminal' }">
         <template v-if="data.node.type === 'research'"><div><span>Выработка</span><strong>{{ data.node.productionRate.toFixed(1) }} <small>ед/с</small></strong></div><div :class="{ warning: data.node.dataBuffer > 0.75 }"><span>Буфер</span><strong>{{ data.node.dataBuffer.toFixed(1) }} <small>данных</small></strong></div></template>
         <template v-else-if="data.node.type === 'server'"><div><span>Приём / выход</span><strong>{{ data.node.inputRate.toFixed(1) }} / {{ data.node.outputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Хранилище</span><strong>{{ data.node.dataStored.toFixed(1) }} <small>данных</small></strong></div></template>
-        <template v-else-if="data.node.type === 'terminal'"><div><span>Продажа</span><strong>{{ data.node.inputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Продано</span><strong>{{ data.node.dataSold.toFixed(1) }} <small>данных</small></strong></div></template>
+        <template v-else-if="data.node.type === 'terminal'"><div><span>Продажа</span><strong>{{ data.node.inputRate.toFixed(1) }} <small>ед/с</small></strong></div></template>
         <template v-else><div><span>Мест</span><strong>{{ data.node.slots.filter((slot) => !slot.catId).length }} <small>свободно</small></strong></div><div><span>Статус</span><strong>тихо</strong></div></template>
       </footer>
 
