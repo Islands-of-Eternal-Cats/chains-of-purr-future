@@ -657,7 +657,7 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <div class="brand">
         <button class="brand-mark" type="button" aria-label="Логотип лаборатории" @click="unlockDiagnosticSpeed">✦</button>
-        <div><p>CATMAND / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
+        <div><p>PURRFECT / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
       </div>
       <div class="topbar-actions">
         <div class="speed-control" aria-label="Скорость симуляции">
