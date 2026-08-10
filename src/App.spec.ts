@@ -1,11 +1,22 @@
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { onMounted } from 'vue'
 import { GAME_BALANCE, Simulation } from './core'
 import App from './App.vue'
 
 const VueFlowStub = {
   props: ['nodes', 'edges', 'isValidConnection'],
-  emits: ['connect'],
+  emits: ['connect', 'init'],
+  setup(_props: unknown, { emit }: { emit: (event: string, value: unknown) => void }) {
+    onMounted(() => {
+      emit('init', {
+        screenToFlowCoordinate: ({ x, y }: { x: number; y: number }) => ({
+          x: (x - 264 + 160) / 1.25,
+          y: (y - 82 - 50) / 1.25,
+        }),
+      })
+    })
+  },
   template: `
     <div class="flow-stub">
       <i
@@ -14,6 +25,8 @@ const VueFlowStub = {
         class="flow-node-stub"
         :data-node-id="node.id"
         :data-blocked="String(node.data.blocked)"
+        :data-x="node.position.x"
+        :data-y="node.position.y"
       />
       <i
         v-for="edge in edges.filter((candidate) => isValidConnection(candidate))"
@@ -51,6 +64,7 @@ const VueFlowStub = {
 
 describe('App economy controls', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     const values = new Map<string, string>()
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
@@ -61,6 +75,17 @@ describe('App economy controls', () => {
       get length() { return values.size },
     }
     Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 264,
+      y: 82,
+      left: 264,
+      top: 82,
+      right: 1264,
+      bottom: 782,
+      width: 1000,
+      height: 700,
+      toJSON: () => ({}),
+    })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
   })
@@ -241,27 +266,28 @@ describe('App economy controls', () => {
     wrapper.unmount()
   })
 
-  it('keeps the default data nodes apart and renders both validated data edges', async () => {
+  it('centers new nodes in the visible graph after pan and zoom and blocks overlaps', async () => {
     const wrapper = mount(App, {
       global: { stubs: { VueFlow: VueFlowStub } },
     })
 
     const buttons = wrapper.findAll('.action-button')
     await buttons.find((button) => button.text().includes('Исследования ·'))!.trigger('click')
-    await buttons.find((button) => button.text().includes('Сервер ·'))!.trigger('click')
-    await buttons.find((button) => button.text().includes('Торговый терминал ·'))!.trigger('click')
+    const researchNode = wrapper.find('[data-node-id="research-1"]')
+    expect(researchNode.attributes('data-x')).toBe('385')
+    expect(researchNode.attributes('data-y')).toBe('130')
 
-    expect(wrapper.find('[data-node-id="research-1"]').attributes('data-blocked')).toBe('false')
-    expect(wrapper.find('[data-node-id="server-2"]').attributes('data-blocked')).toBe('false')
-    expect(wrapper.find('[data-node-id="terminal-3"]').attributes('data-blocked')).toBe('false')
-
-    await wrapper.find('.connect-research-server').trigger('click')
-    expect(wrapper.find('[data-edge-id="data-research-1--server-2"]').exists()).toBe(true)
-
-    await wrapper.find('.connect-server-terminal').trigger('click')
-    expect(wrapper.find('[data-edge-id="data-server-2--terminal-3"]').exists()).toBe(true)
-    expect(wrapper.findAll('.flow-edge-stub')).toHaveLength(2)
+    await buttons.find((button) => button.text().includes('Дорожный хаб ·'))!.trigger('click')
+    const hubNode = wrapper.find('[data-node-id="hub-2"]')
+    expect(hubNode.attributes('data-x')).toBe('490')
+    expect(hubNode.attributes('data-y')).toBe('202')
+    expect(researchNode.attributes('data-blocked')).toBe('true')
+    expect(hubNode.attributes('data-blocked')).toBe('true')
     wrapper.unmount()
+
+    const saved = JSON.parse(window.localStorage.getItem('catmand-save-v1')!)
+    expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'research-1').position).toEqual({ x: 385, y: 130 })
+    expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'hub-2').position).toEqual({ x: 490, y: 202 })
   })
 
   it('selects a working cat first, supports Escape, and then transfers it directly to another module', async () => {

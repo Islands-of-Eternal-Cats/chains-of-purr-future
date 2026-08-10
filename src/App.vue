@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
@@ -9,6 +9,7 @@ import { formatGameNumber, formatVigor } from './formatGameNumber'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
+type FlowCoordinateApi = { screenToFlowCoordinate: (position: Point) => Point }
 type SimulationSpeed = 0 | 1 | 5 | 10 | 100
 type SpeedOption = { value: SimulationSpeed; label: string; shortcut?: string }
 
@@ -55,6 +56,8 @@ const normalSpeedOptions: SpeedOption[] = [
 ]
 const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: `×${formatGameNumber(100)}` }] : normalSpeedOptions)
 const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])))
+const graphFrame = ref<HTMLElement | null>(null)
+const flowCoordinateApi = shallowRef<FlowCoordinateApi | null>(null)
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const assignedCatIds = computed(() => new Set(snapshot.value.nodes.flatMap((node) => node.slots.flatMap((slot) => slot.assignedCatId ? [slot.assignedCatId] : []))))
@@ -102,6 +105,21 @@ function defaultNodePosition(type: NodeType): Point {
 
 function nodeSize(type: NodeType): Size {
   return type === 'hub' ? { width: 76, height: 76 } : { width: 286, height: 220 }
+}
+
+function handleFlowInit(api: FlowCoordinateApi) {
+  flowCoordinateApi.value = api
+}
+
+function centeredNodePosition(type: NodeType): Point {
+  const bounds = graphFrame.value?.getBoundingClientRect()
+  if (!bounds || !flowCoordinateApi.value) return defaultNodePosition(type)
+  const center = flowCoordinateApi.value.screenToFlowCoordinate({
+    x: bounds.left + bounds.width / 2,
+    y: bounds.top + bounds.height / 2,
+  })
+  const size = nodeSize(type)
+  return { x: center.x - size.width / 2, y: center.y - size.height / 2 }
 }
 
 function overlaps(first: Point, firstSize: Size, second: Point, secondSize: Size) {
@@ -257,7 +275,7 @@ function report(result: CommandResult<unknown>, success: string) {
 function createNode(type: NodeType) {
   const result = simulation.createNode(type)
   if (result.ok) {
-    positions.value[result.value.id] = defaultNodePosition(type)
+    positions.value[result.value.id] = centeredNodePosition(type)
     simulation.setNodePosition(result.value.id, positions.value[result.value.id])
     sync()
     syncBlockedNodes()
@@ -740,7 +758,7 @@ onBeforeUnmount(() => {
         </div>
       </aside>
 
-      <section class="graph-frame" aria-label="Граф лаборатории">
+      <section ref="graphFrame" class="graph-frame" aria-label="Граф лаборатории">
         <VueFlow
           :nodes="flowNodes"
           :edges="renderedEdges"
@@ -753,6 +771,7 @@ onBeforeUnmount(() => {
           :nodes-draggable="true"
           :connection-mode="ConnectionMode.Loose"
           :is-valid-connection="isValidConnection"
+          @init="handleFlowInit"
           @connect="onConnect"
           @edge-click="selectConnection"
           @node-click="selectModule"
