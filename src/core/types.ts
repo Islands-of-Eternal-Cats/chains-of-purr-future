@@ -1,4 +1,4 @@
-export type NodeType = 'rest' | 'research' | 'server' | 'hub'
+export type NodeType = 'rest' | 'research' | 'server' | 'hub' | 'terminal'
 export type RoadPort = 'road' | 'north' | 'east' | 'south' | 'west'
 
 export interface Point {
@@ -66,17 +66,28 @@ export interface SimNode {
   blocked?: boolean
   position?: Point
   slots: WorkSlot[]
-  scienceBuffer: number
-  scienceReceived: number
+  dataBuffer: number
+  dataStored: number
+  dataSold: number
   productionRate: number
   inputRate: number
+  outputRate: number
 }
 
 export interface Connection {
   id: string
   sourceId: string
   targetId: string
-  resource: 'scienceData'
+  resource: 'data'
+}
+
+export interface EconomySnapshot {
+  credits: number
+  totalEarned: number
+  totalSpent: number
+  upkeepPerMinute: number
+  revenuePerMinute: number
+  debtWarning: boolean
 }
 
 export interface WorkerLink {
@@ -94,6 +105,31 @@ export interface SimulationSnapshot {
   connections: Connection[]
   workerLinks: WorkerLink[]
   flightUnlocked: boolean
+  scienceProgress: number
+  economy: EconomySnapshot
+}
+
+export interface PersistedEconomyV1 {
+  credits: number
+  totalEarned: number
+  totalSpent: number
+}
+
+export interface SimulationStateV1 {
+  nodes: SimNode[]
+  cats: Cat[]
+  connections: Connection[]
+  workerLinks: WorkerLink[]
+  nodeCounter: number
+  catCounter: number
+  flightUnlocked: boolean
+  scienceProgress: number
+  economy: PersistedEconomyV1
+}
+
+export interface GameSaveV1 {
+  version: 1
+  simulation: SimulationStateV1
 }
 
 export type CommandResult<T = void> =

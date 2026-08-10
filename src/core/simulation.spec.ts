@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
+import { GAME_BALANCE } from './balance'
 import { Simulation } from './simulation'
 import type { WorkerLink } from './types'
 
-function node(simulation: Simulation, type: 'rest' | 'research' | 'server' | 'hub') {
+function node(simulation: Simulation, type: 'rest' | 'research' | 'server' | 'hub' | 'terminal') {
   const result = simulation.snapshot().nodes.find((candidate) => candidate.type === type)
   if (!result) throw new Error(`Missing ${type}`)
   return result
+}
+
+function fundedSimulation(credits = 10_000) {
+  const simulation = new Simulation()
+  const save = simulation.exportSave()
+  save.simulation.economy.credits = credits
+  const restored = Simulation.fromSave(save)
+  if (!restored.ok) throw new Error(restored.reason)
+  return restored.value
 }
 
 function cat(simulation: Simulation, id = 'cat-1') {
@@ -45,7 +55,7 @@ describe('Simulation rest seating', () => {
   })
 
   it('allows creating every building type more than once', () => {
-    const simulation = new Simulation()
+    const simulation = fundedSimulation()
 
     for (const type of ['rest', 'research', 'server'] as const) {
       expect(simulation.createNode(type).ok).toBe(true)
@@ -301,7 +311,7 @@ describe('Simulation rest seating', () => {
     simulation.tick(0.5)
     expect(node(simulation, 'research').slots[0].catId).toBe('cat-1')
     simulation.tick(1)
-    expect(node(simulation, 'research').scienceBuffer).toBeCloseTo(1)
+    expect(node(simulation, 'research').dataBuffer).toBeCloseTo(1)
   })
 
   it('scales research output with the number of occupied work slots', () => {
@@ -316,7 +326,7 @@ describe('Simulation rest seating', () => {
     simulation.tick(1)
 
     expect(node(simulation, 'research').productionRate).toBe(2)
-    expect(node(simulation, 'research').scienceBuffer).toBeCloseTo(2)
+    expect(node(simulation, 'research').dataBuffer).toBeCloseTo(2)
   })
 
   it('recalculates the globally fastest remaining route at each hub', () => {
@@ -362,7 +372,7 @@ describe('Simulation rest seating', () => {
     simulation.tick(1)
     simulation.tick(1)
     expect(node(simulation, 'server').inputRate).toBeCloseTo(1)
-    expect(node(simulation, 'server').scienceReceived).toBeCloseTo(2)
+    expect(node(simulation, 'server').dataStored).toBeCloseTo(2)
     simulation.releaseCat('cat-2')
     simulation.tick(1)
     simulation.tick(2)
@@ -470,8 +480,7 @@ describe('Simulation flight era', () => {
   it('unlocks at 50 data units and sends cats directly at twice road speed', () => {
     const simulation = new Simulation()
     const { road } = unlockFlight(simulation)
-    const totalData = simulation.snapshot().nodes.reduce((total, candidate) => total + candidate.scienceReceived, 0)
-    expect(totalData).toBe(50)
+    expect(simulation.snapshot().scienceProgress).toBe(50)
     expect(simulation.snapshot().flightUnlocked).toBe(true)
 
     const destination = simulation.createNode('research')
@@ -494,25 +503,30 @@ describe('Simulation flight era', () => {
     expect(simulation.snapshot().nodes.find((candidate) => candidate.id === destination.value.id)?.slots.some((slot) => slot.catId === 'cat-2')).toBe(true)
   })
 
-  it('resumes a stranded cat by flight once stored science reaches the threshold', () => {
-    const simulation = new Simulation()
+  it('resumes a stranded cat when research progress reaches the flight threshold', () => {
+    const simulation = fundedSimulation()
     const research = simulation.createNode('research')
     const server = simulation.createNode('server')
-    if (!research.ok || !server.ok) throw new Error('Missing stranded setup')
-    const road = simulation.connectWorkerNodes('rest-1', research.value.id, 1)
-    if (!road.ok) throw new Error(road.reason)
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing stranded setup')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    const serverRoad = simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    if (!serverRoad.ok) throw new Error(serverRoad.reason)
     simulation.setNodePosition('rest-1', { x: 0, y: 0 })
     simulation.setNodePosition(research.value.id, { x: 500, y: 0 })
-    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
-    for (let second = 0; second < 160 && node(simulation, 'research').scienceBuffer < 50; second += 1) simulation.tick(1)
-
-    for (let second = 0; second < 20 && !(cat(simulation).nodeId === research.value.id && cat(simulation).status === 'idle'); second += 1) simulation.tick(1)
+    simulation.setNodePosition(server.value.id, { x: 800, y: 0 })
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)
+    simulation.assignCat('cat-2', research.value.id, research.value.slots[0].id)
+    for (let second = 0; second < 240 && simulation.snapshot().scienceProgress < 49; second += 1) simulation.tick(1)
+    expect(simulation.snapshot().flightUnlocked).toBe(false)
     expect(simulation.releaseCat('cat-1')).toMatchObject({ ok: true })
-    expect(simulation.disconnectWorkerLink(road.value.id)).toMatchObject({ ok: true })
+    expect(simulation.disconnectWorkerLink(serverRoad.value.id)).toMatchObject({ ok: true })
     expect(cat(simulation)).toMatchObject({ status: 'stranded', stranded: { targetNodeId: 'rest-1' } })
 
-    simulation.connect(research.value.id, server.value.id)
-    for (let second = 0; second < 120 && !simulation.snapshot().flightUnlocked; second += 1) simulation.tick(1)
+    simulation.tick(1)
     expect(simulation.snapshot().flightUnlocked).toBe(true)
     expect(cat(simulation).travel).toMatchObject({ kind: 'flight', targetNodeId: 'rest-1', flightProgress: 0 })
   })
@@ -533,7 +547,7 @@ describe('Simulation flight era', () => {
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
     simulation.hireCat()
     simulation.tick(5)
-    for (let second = 0; second < 320 && simulation.snapshot().nodes.reduce((total, candidate) => total + candidate.scienceReceived, 0) < 46; second += 1) simulation.tick(1)
+    for (let second = 0; second < 320 && simulation.snapshot().scienceProgress < 46; second += 1) simulation.tick(1)
 
     expect(simulation.assignCat('cat-2', research.value.id, research.value.slots[1].id)).toMatchObject({ ok: true })
     for (let second = 0; second < 20 && !simulation.snapshot().flightUnlocked; second += 1) simulation.tick(1)
@@ -545,5 +559,130 @@ describe('Simulation flight era', () => {
     expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', fromNodeId: hub.value.id, targetNodeId: research.value.id })
     expect(simulation.disconnectWorkerLink(firstRoad.value.id)).toMatchObject({ ok: true })
     expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight' })
+  })
+})
+
+describe('Simulation cozy economy and data network', () => {
+  it('defines balance for every node type and charges the shared configured prices', () => {
+    expect(Object.keys(GAME_BALANCE.nodes).sort()).toEqual(['hub', 'research', 'rest', 'server', 'terminal'])
+    const simulation = new Simulation()
+    const before = simulation.snapshot().economy.credits
+    const terminal = simulation.createNode('terminal')
+    expect(terminal).toMatchObject({ ok: true, value: { type: 'terminal', slots: [{ id: expect.any(String) }] } })
+    expect(simulation.snapshot().economy.credits).toBe(before - GAME_BALANCE.nodes.terminal.cost)
+    if (!terminal.ok) throw new Error(terminal.reason)
+    simulation.deleteNode(terminal.value.id)
+    expect(simulation.snapshot().economy.credits).toBe(before - GAME_BALANCE.nodes.terminal.cost * (1 - GAME_BALANCE.economy.demolitionRefundRatio))
+  })
+
+  it('produces irreversible science progress and sellable data without a server', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+    simulation.tick(1)
+
+    expect(simulation.snapshot().scienceProgress).toBeCloseTo(GAME_BALANCE.science.progressPerWorkSecond)
+    expect(node(simulation, 'research').dataBuffer).toBeCloseTo(GAME_BALANCE.science.dataPerWorkSecond)
+    expect(simulation.snapshot().connections).toHaveLength(0)
+  })
+
+  it('enforces the directed data compatibility matrix, bounded ports, and cycle rejection', () => {
+    const simulation = fundedSimulation()
+    const research = simulation.createNode('research')
+    const first = simulation.createNode('server')
+    const second = simulation.createNode('server')
+    const third = simulation.createNode('server')
+    const terminal = simulation.createNode('terminal')
+    if (!research.ok || !first.ok || !second.ok || !third.ok || !terminal.ok) throw new Error('Missing data nodes')
+
+    expect(simulation.connect(research.value.id, terminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Несовместимые') })
+    expect(simulation.connect(first.value.id, first.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('самим собой') })
+    expect(simulation.connect(research.value.id, first.value.id).ok).toBe(true)
+    expect(simulation.connect(first.value.id, second.value.id).ok).toBe(true)
+    expect(simulation.connect(second.value.id, first.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('цикл') })
+    expect(simulation.connect(second.value.id, terminal.value.id).ok).toBe(true)
+    expect(simulation.connect(second.value.id, third.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('занят') })
+    expect(simulation.connect(third.value.id, terminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Вход') })
+  })
+
+  it('shares server input fairly, conserves relayed data, and sells terminal inventory', () => {
+    let simulation = fundedSimulation()
+    const firstResearch = simulation.createNode('research')
+    const secondResearch = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const terminal = simulation.createNode('terminal')
+    if (!firstResearch.ok || !secondResearch.ok || !server.ok || !terminal.ok) throw new Error('Missing trade nodes')
+    simulation.connect(firstResearch.value.id, server.value.id)
+    simulation.connect(secondResearch.value.id, server.value.id)
+    simulation.connect(server.value.id, terminal.value.id)
+    const save = simulation.exportSave()
+    save.simulation.nodes.find((candidate) => candidate.id === firstResearch.value.id)!.dataBuffer = 10
+    save.simulation.nodes.find((candidate) => candidate.id === secondResearch.value.id)!.dataBuffer = 10
+    const restored = Simulation.fromSave(save)
+    if (!restored.ok) throw new Error(restored.reason)
+    simulation = restored.value
+
+    simulation.tick(1)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === firstResearch.value.id)?.dataBuffer).toBeCloseTo(9.75)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === secondResearch.value.id)?.dataBuffer).toBeCloseTo(9.75)
+    expect(node(simulation, 'server').dataStored).toBeCloseTo(0.25)
+    expect(node(simulation, 'terminal').dataSold).toBeCloseTo(0.25)
+    expect(simulation.snapshot().economy.totalEarned).toBeCloseTo(0.25 * GAME_BALANCE.economy.dataSalePrice)
+    const conserved = simulation.snapshot().nodes.reduce((total, candidate) => total + candidate.dataBuffer + candidate.dataStored + candidate.dataSold, 0)
+    expect(conserved).toBeCloseTo(20)
+  })
+
+  it('dismisses a travelling non-starter cat safely and protects the starter cat', () => {
+    const simulation = fundedSimulation()
+    const research = createResearch(simulation)
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-2', research.id, research.slots[0].id)
+    expect(cat(simulation, 'cat-2').status).toBe('travelling')
+    const before = simulation.snapshot().economy.credits
+
+    expect(simulation.dismissCat('cat-2')).toMatchObject({ ok: true })
+    expect(simulation.snapshot().cats.some((candidate) => candidate.id === 'cat-2')).toBe(false)
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, reservedByCatId: null, assignedCatId: null })
+    expect(simulation.snapshot().economy.credits).toBeCloseTo(before - GAME_BALANCE.economy.dismissCatCost)
+    expect(simulation.dismissCat('cat-1')).toMatchObject({ ok: false, reason: expect.stringContaining('Первого') })
+  })
+
+  it('warns at the debt threshold but can recover through continued trade', () => {
+    let simulation = fundedSimulation()
+    const server = simulation.createNode('server')
+    const terminal = simulation.createNode('terminal')
+    if (!server.ok || !terminal.ok) throw new Error('Missing recovery nodes')
+    simulation.connect(server.value.id, terminal.value.id)
+    const save = simulation.exportSave()
+    save.simulation.economy.credits = GAME_BALANCE.economy.debtWarningThreshold
+    save.simulation.nodes.find((candidate) => candidate.id === server.value.id)!.dataStored = 20
+    const restored = Simulation.fromSave(save)
+    if (!restored.ok) throw new Error(restored.reason)
+    simulation = restored.value
+    expect(simulation.snapshot().economy.debtWarning).toBe(true)
+    expect(simulation.createNode('hub')).toMatchObject({ ok: false, reason: expect.stringContaining('Недостаточно') })
+
+    simulation.tick(10)
+    expect(simulation.snapshot().economy.credits).toBeGreaterThan(GAME_BALANCE.economy.debtWarningThreshold)
+    expect(simulation.snapshot().economy.debtWarning).toBe(false)
+  })
+
+  it('round-trips versioned saves and rejects invalid versions or references atomically', () => {
+    const simulation = fundedSimulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.setNodePosition(research.value.id, { x: 321, y: 123 })
+    const serialized = JSON.parse(JSON.stringify(simulation.exportSave()))
+    const restored = Simulation.fromSave(serialized)
+    expect(restored.ok).toBe(true)
+    if (!restored.ok) throw new Error(restored.reason)
+    expect(restored.value.exportSave()).toEqual(serialized)
+
+    expect(Simulation.fromSave({ ...serialized, version: 2 })).toMatchObject({ ok: false, reason: expect.stringContaining('верс') })
+    const corrupt = structuredClone(serialized)
+    corrupt.simulation.cats[0].nodeId = 'missing-node'
+    expect(Simulation.fromSave(corrupt)).toMatchObject({ ok: false, reason: expect.stringContaining('ссыл') })
   })
 })

@@ -1,15 +1,11 @@
-import type { Cat, CommandResult, Connection, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, TravelLeg, WorkerLink, WorkSlot } from './types'
+import { GAME_BALANCE } from './balance'
+import type { Cat, CommandResult, Connection, GameSaveV1, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, SimulationStateV1, TravelLeg, WorkerLink, WorkSlot } from './types'
 
 const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
 const CAT_VARIANTS = ['◕', '◔', '◑', '◒', '◐']
 const EPSILON = 0.000001
-const MAX_VIGOR = 100
-const WORK_VIGOR_DRAIN_PER_SECOND = 10
-const REST_VIGOR_RECOVERY_PER_SECOND = 20
-const FLIGHT_UNLOCK_DATA = 50
-const ROAD_SPEED_PIXELS_PER_SECOND = 250
-const MIN_ROAD_TRAVEL_SECONDS = 0.6
+const SAVE_VERSION = 1
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
   return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
@@ -31,6 +27,61 @@ function roadPorts(type: NodeType): RoadPort[] {
   return type === 'hub' ? ['north', 'east', 'south', 'west'] : ['road']
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string'
+}
+
+function isWorkSlot(value: unknown): value is WorkSlot {
+  return isRecord(value) && typeof value.id === 'string' && isNullableString(value.catId)
+    && isNullableString(value.reservedByCatId) && isNullableString(value.assignedCatId)
+}
+
+function isSimNode(value: unknown): value is SimNode {
+  return isRecord(value) && typeof value.id === 'string'
+    && ['rest', 'research', 'server', 'hub', 'terminal'].includes(String(value.type))
+    && typeof value.name === 'string' && (value.blocked === undefined || typeof value.blocked === 'boolean')
+    && isRecord(value.position) && isFiniteNumber(value.position.x) && isFiniteNumber(value.position.y)
+    && Array.isArray(value.slots) && value.slots.every(isWorkSlot)
+    && ['dataBuffer', 'dataStored', 'dataSold', 'productionRate', 'inputRate', 'outputRate'].every((key) => isFiniteNumber(value[key]) && Number(value[key]) >= 0)
+}
+
+function isConnection(value: unknown): value is Connection {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.sourceId === 'string'
+    && typeof value.targetId === 'string' && value.resource === 'data'
+}
+
+function isWorkerLink(value: unknown): value is WorkerLink {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.nodeAId === 'string' && typeof value.nodeBId === 'string'
+    && ['road', 'north', 'east', 'south', 'west'].includes(String(value.nodeAPort))
+    && ['road', 'north', 'east', 'south', 'west'].includes(String(value.nodeBPort))
+    && isFiniteNumber(value.travelSeconds) && value.travelSeconds > 0
+}
+
+function isCat(value: unknown): value is Cat {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string' || typeof value.variant !== 'string'
+    || typeof value.nodeId !== 'string' || !isNullableString(value.slotId)
+    || !['idle', 'travelling', 'stranded'].includes(String(value.status)) || !isFiniteNumber(value.vigor)) return false
+  if (value.stranded !== undefined && value.stranded !== null && (!isRecord(value.stranded)
+    || typeof value.stranded.targetNodeId !== 'string' || typeof value.stranded.targetSlotId !== 'string' || typeof value.stranded.sourceNodeId !== 'string')) return false
+  if (value.travel === null) return true
+  if (!isRecord(value.travel) || !['road', 'flight'].includes(String(value.travel.kind))
+    || typeof value.travel.targetNodeId !== 'string' || typeof value.travel.targetSlotId !== 'string' || typeof value.travel.sourceNodeId !== 'string') return false
+  if (value.travel.kind === 'road') return isRecord(value.travel.leg) && typeof value.travel.leg.linkId === 'string'
+    && typeof value.travel.leg.fromNodeId === 'string' && typeof value.travel.leg.toNodeId === 'string'
+    && isFiniteNumber(value.travel.legProgress)
+  return typeof value.travel.fromNodeId === 'string' && isNullableString(value.travel.fromSlotId)
+    && isFiniteNumber(value.travel.flightDurationSeconds) && value.travel.flightDurationSeconds > 0
+    && isFiniteNumber(value.travel.flightProgress)
+}
+
 export class Simulation {
   private readonly nodes = new Map<string, SimNode>()
   private readonly cats = new Map<string, Cat>()
@@ -39,15 +90,21 @@ export class Simulation {
   private nodeCounter = 0
   private catCounter = 0
   private flightUnlocked = false
+  private scienceProgress = 0
+  private credits: number = GAME_BALANCE.economy.startingCredits
+  private totalEarned = 0
+  private totalSpent = 0
+  private lastRevenuePerMinute = 0
 
-  constructor() {
+  constructor(initialize = true) {
+    if (!initialize) return
     this.nodes.set(REST_ID, {
-      id: REST_ID, type: 'rest', name: 'Комната отдыха', slots: slots(REST_ID, 3),
+      id: REST_ID, type: 'rest', name: 'Комната отдыха', slots: slots(REST_ID, GAME_BALANCE.nodes.rest.slots),
       blocked: false,
       position: { x: 80, y: 270 },
-      scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
+      dataBuffer: 0, dataStored: 0, dataSold: 0, productionRate: 0, inputRate: 0, outputRate: 0,
     })
-    this.addCat(MAX_VIGOR)
+    this.addCat(GAME_BALANCE.cats.maxVigor)
   }
 
   snapshot(): SimulationSnapshot {
@@ -57,10 +114,60 @@ export class Simulation {
       connections: [...this.connections.values()].map((connection) => ({ ...connection })),
       workerLinks: [...this.workerLinks.values()].map((link) => ({ ...link })),
       flightUnlocked: this.flightUnlocked,
+      scienceProgress: this.scienceProgress,
+      economy: {
+        credits: this.credits,
+        totalEarned: this.totalEarned,
+        totalSpent: this.totalSpent,
+        upkeepPerMinute: this.upkeepPerMinute(),
+        revenuePerMinute: this.lastRevenuePerMinute,
+        debtWarning: this.credits <= GAME_BALANCE.economy.debtWarningThreshold,
+      },
     }
   }
 
+  exportSave(): GameSaveV1 {
+    const snapshot = this.snapshot()
+    return {
+      version: SAVE_VERSION,
+      simulation: {
+        nodes: snapshot.nodes,
+        cats: snapshot.cats,
+        connections: snapshot.connections,
+        workerLinks: snapshot.workerLinks,
+        nodeCounter: this.nodeCounter,
+        catCounter: this.catCounter,
+        flightUnlocked: this.flightUnlocked,
+        scienceProgress: this.scienceProgress,
+        economy: { credits: this.credits, totalEarned: this.totalEarned, totalSpent: this.totalSpent },
+      },
+    }
+  }
+
+  static fromSave(value: unknown): CommandResult<Simulation> {
+    if (!isRecord(value) || value.version !== SAVE_VERSION) return { ok: false, reason: 'Несовместимая версия сохранения.' }
+    const state = value.simulation
+    if (!isRecord(state) || !Array.isArray(state.nodes) || !state.nodes.every(isSimNode)
+      || !Array.isArray(state.cats) || !state.cats.every(isCat)
+      || !Array.isArray(state.connections) || !state.connections.every(isConnection)
+      || !Array.isArray(state.workerLinks) || !state.workerLinks.every(isWorkerLink)
+      || !Number.isInteger(state.nodeCounter) || Number(state.nodeCounter) < 0
+      || !Number.isInteger(state.catCounter) || Number(state.catCounter) < 1
+      || typeof state.flightUnlocked !== 'boolean' || !isFiniteNumber(state.scienceProgress) || state.scienceProgress < 0
+      || !isRecord(state.economy) || !isFiniteNumber(state.economy.credits)
+      || !isFiniteNumber(state.economy.totalEarned) || state.economy.totalEarned < 0
+      || !isFiniteNumber(state.economy.totalSpent) || state.economy.totalSpent < 0) {
+      return { ok: false, reason: 'Сохранение повреждено или имеет неверную структуру.' }
+    }
+    const loaded = new Simulation(false)
+    const typedState = state as unknown as SimulationStateV1
+    if (!loaded.restoreState(typedState)) return { ok: false, reason: 'Сохранение содержит повреждённые ссылки или топологию.' }
+    return { ok: true, value: loaded }
+  }
+
   createNode(type: NodeType): CommandResult<SimNode> {
+    const price = GAME_BALANCE.nodes[type].cost
+    if (this.credits + EPSILON < price) return { ok: false, reason: `Недостаточно кредитов: требуется ${price}.` }
     let id: string
     do {
       this.nodeCounter += 1
@@ -69,13 +176,14 @@ export class Simulation {
     const node: SimNode = {
       id,
       type,
-      name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : type === 'server' ? 'Сервер данных' : 'Дорожный хаб',
+      name: type === 'rest' ? 'Комната отдыха' : type === 'research' ? 'Исследования' : type === 'server' ? 'Сервер данных' : type === 'hub' ? 'Дорожный хаб' : 'Торговый терминал',
       blocked: false,
       position: { x: 0, y: 0 },
-      slots: slots(id, type === 'rest' ? 3 : type === 'research' ? 2 : type === 'server' ? 1 : 0),
-      scienceBuffer: 0, scienceReceived: 0, productionRate: 0, inputRate: 0,
+      slots: slots(id, GAME_BALANCE.nodes[type].slots),
+      dataBuffer: 0, dataStored: 0, dataSold: 0, productionRate: 0, inputRate: 0, outputRate: 0,
     }
     this.nodes.set(id, node)
+    this.spend(price)
     return { ok: true, value: copyNode(node) }
   }
 
@@ -125,6 +233,7 @@ export class Simulation {
     }
     for (const link of this.linksForNode(nodeId)) this.workerLinks.delete(link.id)
     this.nodes.delete(nodeId)
+    this.credits += GAME_BALANCE.nodes[node.type].cost * GAME_BALANCE.economy.demolitionRefundRatio
 
     for (const { cat, position } of evacuations) {
       const restSeat = this.findNearestRestSeat(position)
@@ -159,6 +268,7 @@ export class Simulation {
 
     for (const link of this.linksForNode(hubId)) this.workerLinks.delete(link.id)
     this.nodes.delete(hubId)
+    this.credits += GAME_BALANCE.nodes.hub.cost * GAME_BALANCE.economy.demolitionRefundRatio
     for (const catId of impact.value) {
       const cat = this.cats.get(catId)
       if (!cat) continue
@@ -177,7 +287,23 @@ export class Simulation {
   }
 
   hireCat(): CommandResult<Cat> {
-    return this.addCat(0)
+    const price = GAME_BALANCE.economy.hireCatCost
+    if (this.credits + EPSILON < price) return { ok: false, reason: `Недостаточно кредитов: требуется ${price}.` }
+    const result = this.addCat(0)
+    if (result.ok) this.spend(price)
+    return result
+  }
+
+  dismissCat(catId: string): CommandResult<void> {
+    const cat = this.cats.get(catId)
+    if (!cat) return { ok: false, reason: 'Кот не найден.' }
+    if (catId === 'cat-1') return { ok: false, reason: 'Первого кота увольнять нельзя.' }
+    this.releaseCatOccupancyAndReservations(catId)
+    this.clearWorkAssignmentForCat(catId)
+    this.cats.delete(catId)
+    this.spend(GAME_BALANCE.economy.dismissCatCost)
+    this.seatWaitingCats()
+    return { ok: true, value: undefined }
   }
 
   setNodeBlocked(nodeId: string, blocked: boolean): CommandResult<void> {
@@ -247,13 +373,28 @@ export class Simulation {
     return this.startTravel(cat, restSlot.node.id, restSlot.slot.id)
   }
 
-  connect(sourceId: string, targetId: string): CommandResult<Connection> {
+  canConnect(sourceId: string, targetId: string): CommandResult<void> {
     const source = this.nodes.get(sourceId)
     const target = this.nodes.get(targetId)
+    if (!source || !target) return { ok: false, reason: 'Один из модулей не найден.' }
     if (source?.blocked || target?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
-    if (source?.type !== 'research' || target?.type !== 'server') return { ok: false, reason: 'Разрешена только связь: Исследования → Сервер данных.' }
-    const connection = { id: `science-${sourceId}-${targetId}`, sourceId, targetId, resource: 'scienceData' as const }
+    if (sourceId === targetId) return { ok: false, reason: 'Нельзя соединить модуль с самим собой.' }
+    const compatible = (source.type === 'research' && target.type === 'server')
+      || (source.type === 'server' && target.type === 'server')
+      || (source.type === 'server' && target.type === 'terminal')
+    if (!compatible) return { ok: false, reason: 'Несовместимые порты данных.' }
+    const connection = { id: `data-${sourceId}--${targetId}`, sourceId, targetId, resource: 'data' as const }
     if (this.connections.has(connection.id)) return { ok: false, reason: 'Этот канал данных уже существует.' }
+    if (source.type === 'server' && [...this.connections.values()].some((candidate) => candidate.sourceId === sourceId)) return { ok: false, reason: 'Выход данных этого сервера уже занят.' }
+    if (target.type === 'terminal' && [...this.connections.values()].some((candidate) => candidate.targetId === targetId)) return { ok: false, reason: 'Вход данных этого терминала уже занят.' }
+    if (source.type === 'server' && target.type === 'server' && this.hasDataPath(targetId, sourceId)) return { ok: false, reason: 'Канал данных создаст цикл.' }
+    return { ok: true, value: undefined }
+  }
+
+  connect(sourceId: string, targetId: string): CommandResult<Connection> {
+    const validation = this.canConnect(sourceId, targetId)
+    if (!validation.ok) return validation
+    const connection = { id: `data-${sourceId}--${targetId}`, sourceId, targetId, resource: 'data' as const }
     this.connections.set(connection.id, connection)
     return { ok: true, value: { ...connection } }
   }
@@ -320,14 +461,14 @@ export class Simulation {
       if (currentNode?.blocked) continue
       if (currentNode?.type === 'rest') {
         if (!cat.slotId) continue
-        cat.vigor = Math.min(MAX_VIGOR, cat.vigor + activeSeconds * REST_VIGOR_RECOVERY_PER_SECOND)
+        cat.vigor = Math.min(GAME_BALANCE.cats.maxVigor, cat.vigor + activeSeconds * GAME_BALANCE.cats.restVigorRecoveryPerSecond)
         continue
       }
       if (currentNode?.type === 'hub') continue
-      const workSeconds = Math.min(activeSeconds, cat.vigor / WORK_VIGOR_DRAIN_PER_SECOND)
+      const workSeconds = Math.min(activeSeconds, cat.vigor / GAME_BALANCE.cats.workVigorDrainPerSecond)
       if (workSeconds > 0) {
         activeSecondsByNode.set(cat.nodeId, (activeSecondsByNode.get(cat.nodeId) ?? 0) + workSeconds)
-        cat.vigor = Math.max(0, cat.vigor - workSeconds * WORK_VIGOR_DRAIN_PER_SECOND)
+        cat.vigor = Math.max(0, cat.vigor - workSeconds * GAME_BALANCE.cats.workVigorDrainPerSecond)
       }
       if (cat.vigor <= EPSILON) this.returnTiredCat(cat)
     }
@@ -337,28 +478,42 @@ export class Simulation {
     for (const node of this.nodes.values()) {
       node.productionRate = 0
       node.inputRate = 0
+      node.outputRate = 0
       const activeSeconds = activeSecondsByNode.get(node.id) ?? 0
       if (node.type === 'research' && activeSeconds > 0) {
-        node.productionRate = activeSeconds / deltaSeconds
-        node.scienceBuffer += activeSeconds
+        const science = activeSeconds * GAME_BALANCE.science.progressPerWorkSecond
+        const data = activeSeconds * GAME_BALANCE.science.dataPerWorkSecond
+        node.productionRate = data / deltaSeconds
+        node.dataBuffer += data
+        this.scienceProgress += science
       }
     }
     if (deltaSeconds === 0) return { ok: true, value: undefined }
-    for (const server of this.nodes.values()) {
+    for (const server of this.dataOrderedServers()) {
       if (server.type !== 'server' || server.blocked) continue
       const serverWorkerSeconds = activeSecondsByNode.get(server.id) ?? 0
-      let remainingCapacity = 0.5 * deltaSeconds + 0.5 * serverWorkerSeconds
-      for (const connection of this.connections.values()) {
-        if (connection.targetId !== server.id || remainingCapacity <= 0) continue
-        const source = this.nodes.get(connection.sourceId)
-        if (!source || source.blocked) continue
-        const transferred = Math.min(source.scienceBuffer, remainingCapacity)
-        source.scienceBuffer -= transferred
-        server.scienceReceived += transferred
-        server.inputRate += transferred / deltaSeconds
-        remainingCapacity -= transferred
-      }
+      const capacity = GAME_BALANCE.data.serverBaseCapacityPerSecond * deltaSeconds
+        + GAME_BALANCE.data.serverOperatorCapacityPerWorkSecond * serverWorkerSeconds
+      const transferred = this.pullData(server.id, capacity, deltaSeconds)
+      server.dataStored += transferred
+      server.inputRate = transferred / deltaSeconds
     }
+    let revenue = 0
+    for (const terminal of this.nodes.values()) {
+      if (terminal.type !== 'terminal' || terminal.blocked) continue
+      const operatorSeconds = activeSecondsByNode.get(terminal.id) ?? 0
+      const capacity = GAME_BALANCE.trade.baseCapacityPerSecond * deltaSeconds
+        + GAME_BALANCE.trade.operatorCapacityPerWorkSecond * operatorSeconds
+      const sold = this.pullData(terminal.id, capacity, deltaSeconds)
+      terminal.dataSold += sold
+      terminal.inputRate = sold / deltaSeconds
+      revenue += sold * GAME_BALANCE.economy.dataSalePrice
+    }
+    const upkeep = this.upkeepPerMinute() * deltaSeconds / 60
+    this.credits += revenue - upkeep
+    this.totalEarned += revenue
+    this.totalSpent += upkeep
+    this.lastRevenuePerMinute = revenue / deltaSeconds * 60
     this.unlockFlightIfReady()
     return { ok: true, value: undefined }
   }
@@ -423,7 +578,7 @@ export class Simulation {
 
   private returnRecoveredCatsToAssignedSlots() {
     for (const cat of this.cats.values()) {
-      if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.vigor < MAX_VIGOR - EPSILON) continue
+      if (cat.status !== 'idle' || this.nodes.get(cat.nodeId)?.type !== 'rest' || cat.vigor < GAME_BALANCE.cats.maxVigor - EPSILON) continue
       const assignment = this.findWorkAssignment(cat.id)
       if (!assignment || assignment.slot.catId || assignment.slot.reservedByCatId) continue
       this.startTravel(cat, assignment.node.id, assignment.slot.id)
@@ -507,6 +662,170 @@ export class Simulation {
     return this.linksForNode(nodeId).filter((link) => link.nodeAId === nodeId ? link.nodeAPort === port : link.nodeBPort === port)
   }
 
+  private upkeepPerMinute() {
+    const nodeUpkeep = [...this.nodes.values()].reduce((total, node) => total + GAME_BALANCE.nodes[node.type].upkeepPerMinute, 0)
+    return nodeUpkeep + this.cats.size * GAME_BALANCE.economy.catUpkeepPerMinute
+  }
+
+  private restoreState(state: SimulationStateV1) {
+    if (!state.nodes.some((node) => node.id === REST_ID && node.type === 'rest')) return false
+    const nodeIds = new Set<string>()
+    const slotIds = new Set<string>()
+    for (const node of state.nodes) {
+      if (nodeIds.has(node.id)) return false
+      nodeIds.add(node.id)
+      for (const slot of node.slots) {
+        if (slotIds.has(slot.id)) return false
+        slotIds.add(slot.id)
+      }
+      this.nodes.set(node.id, copyNode(node))
+    }
+    const catIds = new Set<string>()
+    for (const cat of state.cats) {
+      if (catIds.has(cat.id) || !nodeIds.has(cat.nodeId) || cat.vigor < 0 || cat.vigor > GAME_BALANCE.cats.maxVigor + EPSILON) return false
+      catIds.add(cat.id)
+      this.cats.set(cat.id, copyCat(cat))
+    }
+    if (!catIds.has('cat-1')) return false
+    const workerIds = new Set<string>()
+    const usedRoadPorts = new Set<string>()
+    for (const link of state.workerLinks) {
+      if (workerIds.has(link.id) || !nodeIds.has(link.nodeAId) || !nodeIds.has(link.nodeBId) || link.nodeAId === link.nodeBId) return false
+      const nodeA = this.nodes.get(link.nodeAId)!
+      const nodeB = this.nodes.get(link.nodeBId)!
+      if (!roadPorts(nodeA.type).includes(link.nodeAPort) || !roadPorts(nodeB.type).includes(link.nodeBPort)) return false
+      const portA = `${link.nodeAId}:${link.nodeAPort}`
+      const portB = `${link.nodeBId}:${link.nodeBPort}`
+      if (usedRoadPorts.has(portA) || usedRoadPorts.has(portB)) return false
+      usedRoadPorts.add(portA)
+      usedRoadPorts.add(portB)
+      workerIds.add(link.id)
+      this.workerLinks.set(link.id, { ...link })
+    }
+    const connectionIds = new Set<string>()
+    for (const connection of state.connections) {
+      const source = this.nodes.get(connection.sourceId)
+      const target = this.nodes.get(connection.targetId)
+      const compatible = source && target && connection.sourceId !== connection.targetId && (
+        (source.type === 'research' && target.type === 'server')
+        || (source.type === 'server' && target.type === 'server')
+        || (source.type === 'server' && target.type === 'terminal'))
+      if (!compatible || connectionIds.has(connection.id)) return false
+      if (source.type === 'server' && [...this.connections.values()].some((candidate) => candidate.sourceId === source.id)) return false
+      if (target.type === 'terminal' && [...this.connections.values()].some((candidate) => candidate.targetId === target.id)) return false
+      if (source.type === 'server' && target.type === 'server' && this.hasDataPath(target.id, source.id)) return false
+      connectionIds.add(connection.id)
+      this.connections.set(connection.id, { ...connection })
+    }
+    for (const node of this.nodes.values()) {
+      for (const slot of node.slots) {
+        if ((slot.catId && !catIds.has(slot.catId)) || (slot.reservedByCatId && !catIds.has(slot.reservedByCatId)) || (slot.assignedCatId && !catIds.has(slot.assignedCatId))) return false
+        if (slot.catId) {
+          const cat = this.cats.get(slot.catId)!
+          if (cat.nodeId !== node.id || cat.slotId !== slot.id) return false
+        }
+      }
+    }
+    for (const cat of this.cats.values()) {
+      if (cat.slotId && !this.nodes.get(cat.nodeId)?.slots.some((slot) => slot.id === cat.slotId && slot.catId === cat.id)) return false
+      if (cat.travel) {
+        const target = this.nodes.get(cat.travel.targetNodeId)
+        if (!target?.slots.some((slot) => slot.id === cat.travel?.targetSlotId && slot.reservedByCatId === cat.id)) return false
+        if (cat.travel.kind === 'road' && !workerIds.has(cat.travel.leg.linkId)) return false
+      }
+      if (cat.stranded && !this.nodes.get(cat.stranded.targetNodeId)?.slots.some((slot) => slot.id === cat.stranded?.targetSlotId && slot.reservedByCatId === cat.id)) return false
+    }
+    const highestCatId = Math.max(...[...catIds].map((id) => Number(id.match(/^cat-(\d+)$/)?.[1] ?? Number.NaN)))
+    if (!Number.isFinite(highestCatId) || state.catCounter < highestCatId) return false
+    this.nodeCounter = state.nodeCounter
+    this.catCounter = state.catCounter
+    this.flightUnlocked = state.flightUnlocked
+    this.scienceProgress = state.scienceProgress
+    if (this.flightUnlocked !== (this.scienceProgress >= GAME_BALANCE.science.flightUnlockProgress)) return false
+    this.credits = state.economy.credits
+    this.totalEarned = state.economy.totalEarned
+    this.totalSpent = state.economy.totalSpent
+    this.lastRevenuePerMinute = 0
+    return true
+  }
+
+  private spend(amount: number) {
+    this.credits -= amount
+    this.totalSpent += amount
+  }
+
+  private sourceData(node: SimNode) {
+    return node.type === 'research' ? node.dataBuffer : node.type === 'server' ? node.dataStored : 0
+  }
+
+  private takeSourceData(node: SimNode, amount: number) {
+    if (node.type === 'research') node.dataBuffer = Math.max(0, node.dataBuffer - amount)
+    else if (node.type === 'server') node.dataStored = Math.max(0, node.dataStored - amount)
+  }
+
+  private pullData(targetId: string, capacity: number, deltaSeconds: number) {
+    const incoming = [...this.connections.values()]
+      .filter((connection) => connection.targetId === targetId)
+      .sort((first, second) => first.id.localeCompare(second.id))
+    let remaining = capacity
+    let total = 0
+    while (remaining > EPSILON) {
+      const active = incoming.flatMap((connection) => {
+        const source = this.nodes.get(connection.sourceId)
+        return source && !source.blocked && this.sourceData(source) > EPSILON ? [{ connection, source }] : []
+      })
+      if (!active.length) break
+      const share = remaining / active.length
+      let moved = 0
+      for (const { source } of active) {
+        const amount = Math.min(this.sourceData(source), share)
+        this.takeSourceData(source, amount)
+        source.outputRate += amount / deltaSeconds
+        remaining -= amount
+        total += amount
+        moved += amount
+      }
+      if (moved <= EPSILON) break
+    }
+    return total
+  }
+
+  private dataOrderedServers() {
+    const servers = [...this.nodes.values()].filter((node) => node.type === 'server')
+    const indegrees = new Map(servers.map((server) => [server.id, 0]))
+    for (const connection of this.connections.values()) {
+      if (indegrees.has(connection.sourceId) && indegrees.has(connection.targetId)) indegrees.set(connection.targetId, indegrees.get(connection.targetId)! + 1)
+    }
+    const ready = servers.filter((server) => indegrees.get(server.id) === 0).sort((a, b) => a.id.localeCompare(b.id))
+    const ordered: SimNode[] = []
+    while (ready.length) {
+      const current = ready.shift()!
+      ordered.push(current)
+      for (const connection of this.connections.values()) {
+        if (connection.sourceId !== current.id || !indegrees.has(connection.targetId)) continue
+        indegrees.set(connection.targetId, indegrees.get(connection.targetId)! - 1)
+        if (indegrees.get(connection.targetId) === 0) {
+          ready.push(this.nodes.get(connection.targetId)!)
+          ready.sort((a, b) => a.id.localeCompare(b.id))
+        }
+      }
+    }
+    return [...ordered, ...servers.filter((server) => !ordered.includes(server)).sort((a, b) => a.id.localeCompare(b.id))]
+  }
+
+  private hasDataPath(startId: string, targetId: string) {
+    const pending = [startId]
+    const visited = new Set<string>()
+    while (pending.length) {
+      const current = pending.shift()!
+      if (current === targetId) return true
+      if (visited.has(current)) continue
+      visited.add(current)
+      for (const connection of this.connections.values()) if (connection.sourceId === current) pending.push(connection.targetId)
+    }
+    return false
+  }
+
   private findPath(startId: string, targetId: string): TravelLeg[] | null {
     if (this.nodes.get(startId)?.blocked || this.nodes.get(targetId)?.blocked) return null
     const distances = new Map<string, number>([...this.nodes.keys()].map((id) => [id, Number.POSITIVE_INFINITY]))
@@ -554,12 +873,13 @@ export class Simulation {
   private flightDuration(fromNodeId: string, targetNodeId: string) {
     const from = this.nodes.get(fromNodeId)?.position
     const target = this.nodes.get(targetNodeId)?.position
-    if (!from || !target) return MIN_ROAD_TRAVEL_SECONDS / 2
-    return Math.max(MIN_ROAD_TRAVEL_SECONDS / 2, Math.hypot(target.x - from.x, target.y - from.y) / (ROAD_SPEED_PIXELS_PER_SECOND * 2))
+    const minimumFlightSeconds = GAME_BALANCE.transport.minimumRoadTravelSeconds / GAME_BALANCE.transport.flightSpeedMultiplier
+    if (!from || !target) return minimumFlightSeconds
+    return Math.max(minimumFlightSeconds, Math.hypot(target.x - from.x, target.y - from.y) / (GAME_BALANCE.transport.roadSpeedPixelsPerSecond * GAME_BALANCE.transport.flightSpeedMultiplier))
   }
 
   private unlockFlightIfReady() {
-    if (this.flightUnlocked || [...this.nodes.values()].reduce((total, node) => total + node.scienceReceived, 0) < FLIGHT_UNLOCK_DATA) return
+    if (this.flightUnlocked || this.scienceProgress < GAME_BALANCE.science.flightUnlockProgress) return
     this.flightUnlocked = true
     this.resumeStrandedCats()
     this.returnRecoveredCatsToAssignedSlots()

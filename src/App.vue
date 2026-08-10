@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ConnectionMode, MarkerType, VueFlow, type Connection as FlowConnection, type Edge, type EdgeMouseEvent, type Node, type NodeDragEvent, type NodeMouseEvent } from '@vue-flow/core'
-import { Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
+import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, type RoadPort, type SimNode } from './core'
 import GameNode from './components/GameNode.vue'
 import CatFlightEdge from './components/CatFlightEdge.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
@@ -10,28 +10,47 @@ type Point = { x: number; y: number }
 type Size = { width: number; height: number }
 type SimulationSpeed = 0 | 1 | 5 | 10 | 100
 
-const simulation = new Simulation()
+const SAVE_KEY = 'catmand-save-v1'
+const SAVE_WARNING_KEY = 'catmand-save-warning-acknowledged'
+let initialSaveError = ''
+let invalidStoredSave = ''
+let simulation = new Simulation()
+if (typeof window !== 'undefined') {
+  const stored = window.localStorage.getItem(SAVE_KEY)
+  if (stored) {
+    try {
+      const restored = Simulation.fromSave(JSON.parse(stored))
+      if (restored.ok) simulation = restored.value
+      else {
+        initialSaveError = restored.reason
+        invalidStoredSave = stored
+      }
+    } catch {
+      initialSaveError = 'Локальное сохранение повреждено. Экспортируйте его или начните заново.'
+      invalidStoredSave = stored
+    }
+  }
+}
 const nodeTypes = { game: markRaw(GameNode) }
 const edgeTypes = { workerTransit: markRaw(WorkerTransitEdge), flightTransit: markRaw(CatFlightEdge) }
 const snapshot = ref(simulation.snapshot())
 const selectedCatId = ref<string | null>(null)
 const selectedSlot = ref<{ nodeId: string; slotId: string } | null>(null)
-const selectedConnection = ref<{ id: string; kind: 'science' | 'worker' } | null>(null)
+const selectedConnection = ref<{ id: string; kind: 'data' | 'worker' } | null>(null)
 const selectedModuleId = ref<string | null>(null)
-const status = ref('Создайте лабораторию и назначьте кота на исследование.')
+const status = ref(initialSaveError || 'Создайте лабораторию и назначьте кота на исследование.')
+const saveError = ref(initialSaveError)
+const showEarlyWarning = ref(typeof window !== 'undefined' && window.localStorage.getItem(SAVE_WARNING_KEY) !== '1')
 const simulationSpeed = ref<SimulationSpeed>(1)
-const speedOptions: Array<{ value: SimulationSpeed; label: string }> = [
+const diagnosticSpeedUnlocked = ref(false)
+const normalSpeedOptions: Array<{ value: SimulationSpeed; label: string }> = [
   { value: 0, label: 'Пауза' },
   { value: 1, label: '×1' },
   { value: 5, label: '×5' },
   { value: 10, label: '×10' },
-  { value: 100, label: '×100' },
 ]
-const positions = ref<Record<string, Point>>({
-  'rest-1': { x: 80, y: 270 },
-  'research-1': { x: 440, y: 150 },
-  'server-2': { x: 805, y: 300 },
-})
+const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: '×100' }] : normalSpeedOptions)
+const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])))
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const assignedCatIds = computed(() => new Set(snapshot.value.nodes.flatMap((node) => node.slots.flatMap((slot) => slot.assignedCatId ? [slot.assignedCatId] : []))))
@@ -44,14 +63,16 @@ const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => 
   return !slot.catId
     && !slot.reservedByCatId
     && cat?.status === 'idle'
-    && cat.vigor >= 100
+    && cat.vigor >= GAME_BALANCE.cats.maxVigor
     && cat.nodeId !== node.id
     ? [cat.id]
     : []
 })))
-const canHireCat = computed(() => true)
-const totalScience = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.scienceReceived, 0))
+const canHireCat = computed(() => snapshot.value.economy.credits >= GAME_BALANCE.economy.hireCatCost)
+const totalScience = computed(() => snapshot.value.scienceProgress)
+const totalData = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.dataBuffer + node.dataStored, 0))
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
+const canDismissSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.id !== 'cat-1'))
 const canReturnSelectedCat = computed(() => Boolean(
   selectedCat.value
   && selectedCat.value.status === 'idle'
@@ -69,6 +90,7 @@ function defaultNodePosition(type: NodeType): Point {
   if (type === 'rest') return { x: 80 + offset, y: 270 + offset }
   if (type === 'research') return { x: 440 + offset, y: 150 + offset }
   if (type === 'server') return { x: 805 + offset, y: 300 + offset }
+  if (type === 'terminal') return { x: 440 + offset, y: 450 + offset }
   return { x: 620 + offset, y: 500 + offset }
 }
 
@@ -127,9 +149,9 @@ const flowNodes = computed<Node[]>(() => {
 })
 
 const flowEdges = computed<Edge[]>(() => {
-  const scienceEdges: Edge[] = snapshot.value.connections.map((connection) => ({
-    id: connection.id, source: connection.sourceId, target: connection.targetId, sourceHandle: 'science-out', targetHandle: 'science-in',
-    type: 'smoothstep', animated: true, markerEnd: MarkerType.ArrowClosed, class: 'science-edge', selected: selectedConnection.value?.id === connection.id, data: { kind: 'science' },
+  const dataEdges: Edge[] = snapshot.value.connections.map((connection) => ({
+    id: connection.id, source: connection.sourceId, target: connection.targetId, sourceHandle: 'data-out', targetHandle: 'data-in',
+    type: 'smoothstep', animated: true, markerEnd: MarkerType.ArrowClosed, class: 'science-edge', selected: selectedConnection.value?.id === connection.id, data: { kind: 'data' },
   }))
   const workerEdges: Edge[] = snapshot.value.workerLinks.map((link) => ({
     id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: roadHandle(link.nodeAPort), targetHandle: roadHandle(link.nodeBPort),
@@ -160,7 +182,7 @@ const flowEdges = computed<Edge[]>(() => {
       },
     }]
   })
-  return [...scienceEdges, ...workerEdges, ...(simulationSpeed.value === 1 ? flightEdges : [])]
+  return [...dataEdges, ...workerEdges, ...(simulationSpeed.value === 1 ? flightEdges : [])]
 })
 
 const renderedEdges = ref<Edge[]>([])
@@ -179,14 +201,14 @@ function roadPort(handle: string | null | undefined): RoadPort | null {
 function workerTravelSeconds(firstId: string, secondId: string) {
   const first = nodePosition(snapshot.value.nodes.find((node) => node.id === firstId)!)
   const second = nodePosition(snapshot.value.nodes.find((node) => node.id === secondId)!)
-  return Math.max(0.6, Math.hypot(second.x - first.x, second.y - first.y) / 250)
+  return Math.max(GAME_BALANCE.transport.minimumRoadTravelSeconds, Math.hypot(second.x - first.x, second.y - first.y) / GAME_BALANCE.transport.roadSpeedPixelsPerSecond)
 }
 
 function flightSlotPoint(node: SimNode, slotId: string | null): Point {
   const position = nodePosition(node)
   const slotIndex = slotId ? node.slots.findIndex((slot) => slot.id === slotId) : -1
   if (slotIndex < 0) return { x: position.x + nodeSize(node.type).width / 2, y: position.y + nodeSize(node.type).height / 2 }
-  const columns = node.type === 'research' ? 2 : node.type === 'server' ? 1 : 3
+  const columns = node.type === 'research' ? 2 : node.type === 'server' || node.type === 'terminal' ? 1 : 3
   const gridWidth = nodeSize(node.type).width - 32
   const gap = 7
   const cellWidth = (gridWidth - gap * (columns - 1)) / columns
@@ -196,8 +218,25 @@ function flightSlotPoint(node: SimNode, slotId: string | null): Point {
   }
 }
 
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+let autosaveEnabled = !initialSaveError
+
+function saveLocalNow() {
+  if (!autosaveEnabled || typeof window === 'undefined') return
+  window.localStorage.setItem(SAVE_KEY, JSON.stringify(simulation.exportSave()))
+}
+
+function scheduleAutosave() {
+  if (!autosaveEnabled || autosaveTimer) return
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null
+    saveLocalNow()
+  }, 750)
+}
+
 function sync() {
   snapshot.value = simulation.snapshot()
+  scheduleAutosave()
 }
 
 function report(result: CommandResult<unknown>, success: string) {
@@ -217,7 +256,7 @@ function createNode(type: NodeType) {
     sync()
     syncBlockedNodes()
   }
-  report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : type === 'server' ? 'Сервер данных подключён к лаборатории.' : 'Дорожный хаб развёрнут.')
+  report(result, type === 'rest' ? 'Комната отдыха развёрнута: добавлены три кресла для котов.' : type === 'research' ? 'Исследовательский модуль развёрнут.' : type === 'server' ? 'Сервер данных подключён к лаборатории.' : type === 'terminal' ? 'Торговый терминал готов продавать данные.' : 'Дорожный хаб развёрнут.')
 }
 
 function catPoint(cat: Cat): Point {
@@ -274,6 +313,14 @@ function hireCat() {
   report(result, result.ok && !result.value.slotId ? `${result.value.name} ожидает свободное кресло для восстановления.` : 'Новый кот-оператор начал восстановление в комнате отдыха.')
 }
 
+function dismissSelectedCat() {
+  if (!selectedCat.value) return
+  const name = selectedCat.value.name
+  const result = simulation.dismissCat(selectedCat.value.id)
+  if (result.ok) selectedCatId.value = null
+  report(result, `${name} получил компенсацию и покинул лабораторию.`)
+}
+
 function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   const cat = catIndex.value[catId]
   const nodeName = snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'
@@ -281,7 +328,7 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === catId) : undefined
   const success = updatedCat?.status === 'travelling'
     ? `${cat?.name ?? 'Кот'} закреплён за местом и идёт к модулю: ${nodeName}.`
-    : (updatedCat?.vigor ?? 0) < 100
+    : (updatedCat?.vigor ?? 0) < GAME_BALANCE.cats.maxVigor
       ? `${cat?.name ?? 'Кот'} закреплён за местом и отправится после полного восстановления.`
       : `${cat?.name ?? 'Кот'} закреплён за местом, но пока не может дойти: слот отмечен красным.`
   report(result, success)
@@ -348,7 +395,9 @@ function onConnect(connection: FlowConnection) {
     report(simulation.connectWorkerNodes(connection.source, connection.target, workerTravelSeconds(connection.source, connection.target), sourcePort, targetPort), 'Двунаправленный переход для котов создан.')
     return
   }
-  report(simulation.connect(connection.source, connection.target), 'Канал научных данных установлен.')
+  if (connection.sourceHandle === 'data-out' && connection.targetHandle === 'data-in') {
+    report(simulation.connect(connection.source, connection.target), 'Направленный канал данных установлен.')
+  }
 }
 
 function selectConnection(event: EdgeMouseEvent) {
@@ -357,7 +406,7 @@ function selectConnection(event: EdgeMouseEvent) {
     status.value = 'Выбор связи отменён.'
     return
   }
-  selectedConnection.value = { id: event.edge.id, kind: event.edge.data?.kind === 'worker' ? 'worker' : 'science' }
+  selectedConnection.value = { id: event.edge.id, kind: event.edge.data?.kind === 'worker' ? 'worker' : 'data' }
   status.value = selectedConnection.value.kind === 'worker' ? 'Переход для котов выбран. Его можно отключить в панели.' : 'Канал данных выбран. Его можно отключить в панели.'
 }
 
@@ -374,7 +423,7 @@ function selectModule(event: NodeMouseEvent) {
 function disconnectSelected() {
   if (!selectedConnection.value) return
   const current = selectedConnection.value
-  report(current.kind === 'worker' ? simulation.disconnectWorkerLink(current.id) : simulation.disconnect(current.id), current.kind === 'worker' ? 'Переход для котов отключён.' : 'Канал научных данных отключён.')
+  report(current.kind === 'worker' ? simulation.disconnectWorkerLink(current.id) : simulation.disconnect(current.id), current.kind === 'worker' ? 'Переход для котов отключён.' : 'Канал данных отключён.')
   selectedConnection.value = null
 }
 
@@ -393,7 +442,12 @@ function isValidConnection(connection: FlowConnection) {
   if (!connection.source || !connection.target || connection.source === connection.target) return false
   const flowEdge = connection as Edge
   if (flowEdge.id?.startsWith('flight-') || flowEdge.data?.kind === 'flight') return true
-  if (connection.sourceHandle === 'science-out' && connection.targetHandle === 'science-in') return true
+  if (connection.sourceHandle === 'data-out' && connection.targetHandle === 'data-in') {
+    const isExistingDataConnection = snapshot.value.connections.some((candidate) =>
+      candidate.sourceId === connection.source && candidate.targetId === connection.target,
+    )
+    return isExistingDataConnection || simulation.canConnect(connection.source, connection.target).ok
+  }
   const sourcePort = roadPort(connection.sourceHandle)
   const targetPort = roadPort(connection.targetHandle)
   if (!sourcePort || !targetPort) return false
@@ -414,6 +468,88 @@ function isValidConnection(connection: FlowConnection) {
 function setSimulationSpeed(speed: SimulationSpeed) {
   simulationSpeed.value = speed
   status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${speed}.`
+}
+
+function unlockDiagnosticSpeed() {
+  if (diagnosticSpeedUnlocked.value) return
+  diagnosticSpeedUnlocked.value = true
+  status.value = 'Диагностический режим открыт: доступна скорость ×100.'
+}
+
+function downloadText(contents: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportGame() {
+  downloadText(JSON.stringify(simulation.exportSave(), null, 2), 'catmand-save-v1.json')
+  status.value = 'Сохранение выгружено в JSON.'
+}
+
+function exportInvalidSave() {
+  if (!invalidStoredSave) return
+  downloadText(invalidStoredSave, 'catmand-incompatible-save.json')
+}
+
+function resetTransientState() {
+  selectedCatId.value = null
+  selectedSlot.value = null
+  selectedConnection.value = null
+  selectedModuleId.value = null
+  simulationSpeed.value = 1
+  positions.value = Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }]))
+}
+
+async function importGame(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const text = await file.text()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    saveError.value = 'Файл не является корректным JSON. Текущая игра сохранена.'
+    invalidStoredSave = text
+    return
+  }
+  const restored = Simulation.fromSave(parsed)
+  if (!restored.ok) {
+    saveError.value = `${restored.reason} Текущая игра сохранена.`
+    invalidStoredSave = text
+    return
+  }
+  simulation = restored.value
+  autosaveEnabled = true
+  invalidStoredSave = ''
+  saveError.value = ''
+  resetTransientState()
+  sync()
+  saveLocalNow()
+  status.value = 'Сохранение успешно загружено.'
+}
+
+function resetGame() {
+  if (!window.confirm('Сбросить лабораторию и начать заново?')) return
+  simulation = new Simulation()
+  autosaveEnabled = true
+  invalidStoredSave = ''
+  saveError.value = ''
+  window.localStorage.removeItem(SAVE_KEY)
+  resetTransientState()
+  sync()
+  saveLocalNow()
+  status.value = 'Создана новая лаборатория.'
+}
+
+function acknowledgeEarlyWarning() {
+  showEarlyWarning.value = false
+  window.localStorage.setItem(SAVE_WARNING_KEY, '1')
 }
 
 let frame = 0
@@ -438,14 +574,27 @@ function animate(time: number) {
 }
 
 onMounted(() => { frame = requestAnimationFrame(animate) })
-onBeforeUnmount(() => cancelAnimationFrame(frame))
+onBeforeUnmount(() => {
+  cancelAnimationFrame(frame)
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  saveLocalNow()
+})
 </script>
 
 <template>
   <main class="app-shell" @contextmenu.prevent>
+    <div v-if="showEarlyWarning" class="early-warning">
+      <span>РАННЯЯ РАЗРАБОТКА · сохранения могут стать несовместимыми с будущими версиями.</span>
+      <button type="button" @click="acknowledgeEarlyWarning">Понятно</button>
+    </div>
+    <div v-if="saveError" class="save-error">
+      <span>{{ saveError }}</span>
+      <button v-if="invalidStoredSave" type="button" @click="exportInvalidSave">Скачать проблемный сейв</button>
+      <button type="button" @click="resetGame">Начать заново</button>
+    </div>
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark">✦</span>
+        <button class="brand-mark" type="button" aria-label="Логотип лаборатории" @click="unlockDiagnosticSpeed">✦</button>
         <div><p>CATMAND / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
       </div>
       <div class="topbar-actions">
@@ -463,24 +612,36 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
             >{{ option.label }}</button>
           </div>
         </div>
-        <div class="science-readout"><span>НАУЧНЫЕ ДАННЫЕ</span><strong>{{ totalScience.toFixed(1) }}</strong><em>ед.</em></div>
+        <div class="science-readout"><span>НАУКА / ДАННЫЕ</span><strong>{{ totalScience.toFixed(1) }}</strong><em>/ {{ totalData.toFixed(1) }}</em></div>
+        <div class="economy-readout" :class="{ 'economy-readout--debt': snapshot.economy.credits < 0 }">
+          <span>КРЕДИТЫ</span><strong>{{ snapshot.economy.credits.toFixed(1) }}</strong>
+          <em>{{ (snapshot.economy.revenuePerMinute - snapshot.economy.upkeepPerMinute).toFixed(1) }}/мин</em>
+        </div>
       </div>
     </header>
 
     <section class="workspace">
       <aside class="control-panel">
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
-        <button class="action-button" type="button" @click="createNode('rest')"><span>⌂</span> Добавить комнату отдыха</button>
-        <button class="action-button" type="button" @click="createNode('research')"><span>✦</span> Добавить исследования</button>
-        <button class="action-button" type="button" @click="createNode('server')"><span>▦</span> Добавить сервер</button>
-        <button class="action-button" type="button" @click="createNode('hub')"><span>◆</span> Добавить дорожный хаб</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.rest.cost" @click="createNode('rest')"><span>⌂</span> Комната отдыха · {{ GAME_BALANCE.nodes.rest.cost }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.research.cost" @click="createNode('research')"><span>✦</span> Исследования · {{ GAME_BALANCE.nodes.research.cost }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.server.cost" @click="createNode('server')"><span>▦</span> Сервер · {{ GAME_BALANCE.nodes.server.cost }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.terminal.cost" @click="createNode('terminal')"><span>₡</span> Торговый терминал · {{ GAME_BALANCE.nodes.terminal.cost }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.hub.cost" @click="createNode('hub')"><span>◆</span> Дорожный хаб · {{ GAME_BALANCE.nodes.hub.cost }}</button>
         <p v-if="snapshot.flightUnlocked" class="flight-era-note">✦ ВОЗДУШНАЯ ЭРА · коты летают напрямую</p>
+        <p v-if="snapshot.economy.debtWarning" class="debt-warning">ЛАБОРАТОРИЯ ЗАКРЫТА · ранний доступ позволяет продолжить восстановление.</p>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
-        <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота</button>
+        <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ GAME_BALANCE.economy.hireCatCost }}</button>
         <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
+        <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ GAME_BALANCE.economy.dismissCatCost }}</button>
+        <div class="panel-rule"></div>
+        <p class="panel-label">СОХРАНЕНИЕ</p>
+        <button class="action-button" type="button" @click="exportGame"><span>⇩</span> Выгрузить JSON</button>
+        <label class="action-button file-button"><span>⇧</span> Загрузить JSON<input type="file" accept="application/json,.json" @change="importGame" /></label>
+        <button class="action-button action-button--danger" type="button" @click="resetGame"><span>↺</span> Начать заново</button>
         <div class="hint">
           <span class="hint-number">01</span>
           <p v-if="!snapshot.flightUnlocked">Стальные дуги — путь котов.<br />Время зависит от модулей, не изгиба.<br />Циановые каналы передают данные.</p>
@@ -512,7 +673,7 @@ onBeforeUnmount(() => cancelAnimationFrame(frame))
           </template>
         </VueFlow>
         <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot }"><span class="status-dot"></span>{{ status }}</div>
-        <div class="canvas-caption"><span>LIVE SIMULATION</span><b>1×</b></div>
+        <div class="canvas-caption"><span>LIVE SIMULATION</span><b>{{ simulationSpeed }}×</b></div>
       </section>
     </section>
   </main>

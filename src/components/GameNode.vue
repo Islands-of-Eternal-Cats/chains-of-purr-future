@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
-import type { Cat, SimNode, WorkSlot } from '../core'
+import { GAME_BALANCE, type Cat, type SimNode, type WorkSlot } from '../core'
 
 interface NodeViewData {
   node: SimNode
@@ -31,7 +31,7 @@ function cannotReachAssignedSlot(slot: WorkSlot) {
     && !slot.catId
     && !slot.reservedByCatId
     && cat?.status === 'idle'
-    && cat.vigor >= 100
+    && cat.vigor >= GAME_BALANCE.cats.maxVigor
     && cat.nodeId !== props.data.node.id
 }
 
@@ -43,12 +43,13 @@ function isUnassignedRestCat(slot: WorkSlot) {
   return props.data.node.type === 'rest' && Boolean(slot.catId && props.data.unassignedRestCatIds?.includes(slot.catId))
 }
 
-const nodeIcons = { rest: '⌂', research: '✦', server: '▦', hub: '◆' }
+const nodeIcons = { rest: '⌂', research: '✦', server: '▦', hub: '◆', terminal: '₡' }
 const nodeSubtitles = {
   rest: 'Кот-операторы в резерве',
   research: 'Производство научных данных',
   server: 'Приём и хранение данных',
   hub: 'Развязка дорожной сети',
+  terminal: 'Автоматическая продажа данных',
 }
 </script>
 
@@ -82,8 +83,8 @@ const nodeSubtitles = {
 
     <template v-else>
       <Handle
-        v-if="data.node.type === 'server'"
-        id="science-in"
+        v-if="data.node.type === 'server' || data.node.type === 'terminal'"
+        id="data-in"
         class="game-handle game-handle--input"
         type="target"
         :position="Position.Left"
@@ -145,14 +146,15 @@ const nodeSubtitles = {
       </section>
 
       <footer class="node-metrics">
-        <template v-if="data.node.type === 'research'"><div><span>Выработка</span><strong>{{ data.node.productionRate.toFixed(1) }} <small>ед/с</small></strong></div><div :class="{ warning: data.node.scienceBuffer > 0.75 }"><span>Буфер</span><strong>{{ data.node.scienceBuffer.toFixed(1) }} <small>данных</small></strong></div></template>
-        <template v-else-if="data.node.type === 'server'"><div><span>Приём</span><strong>{{ data.node.inputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Накоплено</span><strong>{{ data.node.scienceReceived.toFixed(1) }} <small>данных</small></strong></div></template>
+        <template v-if="data.node.type === 'research'"><div><span>Выработка</span><strong>{{ data.node.productionRate.toFixed(1) }} <small>ед/с</small></strong></div><div :class="{ warning: data.node.dataBuffer > 0.75 }"><span>Буфер</span><strong>{{ data.node.dataBuffer.toFixed(1) }} <small>данных</small></strong></div></template>
+        <template v-else-if="data.node.type === 'server'"><div><span>Приём / выход</span><strong>{{ data.node.inputRate.toFixed(1) }} / {{ data.node.outputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Хранилище</span><strong>{{ data.node.dataStored.toFixed(1) }} <small>данных</small></strong></div></template>
+        <template v-else-if="data.node.type === 'terminal'"><div><span>Продажа</span><strong>{{ data.node.inputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Продано</span><strong>{{ data.node.dataSold.toFixed(1) }} <small>данных</small></strong></div></template>
         <template v-else><div><span>Мест</span><strong>{{ data.node.slots.filter((slot) => !slot.catId).length }} <small>свободно</small></strong></div><div><span>Статус</span><strong>тихо</strong></div></template>
       </footer>
 
       <Handle id="road" class="game-handle game-handle--road" type="target" :position="Position.Bottom" />
       <Handle id="road" class="game-handle game-handle--road" type="source" :position="Position.Bottom" />
-      <Handle v-if="data.node.type === 'research'" id="science-out" class="game-handle game-handle--output" type="source" :position="Position.Right" />
+      <Handle v-if="data.node.type === 'research' || data.node.type === 'server'" id="data-out" class="game-handle game-handle--output" type="source" :position="Position.Right" />
     </template>
   </article>
 </template>
