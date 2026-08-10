@@ -80,6 +80,7 @@ const totalScience = computed(() => snapshot.value.scienceProgress)
 const totalData = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.dataBuffer + node.dataStored, 0))
 const netIncomePerMinute = computed(() => snapshot.value.economy.revenuePerMinute - snapshot.value.economy.upkeepPerMinute)
 const scienceGoalComplete = computed(() => snapshot.value.flightUnlocked)
+const flightResearchProgress = computed(() => Math.min(totalScience.value / GAME_BALANCE.science.flightUnlockProgress * 100, 100))
 const salesGoalComplete = computed(() => snapshot.value.economy.totalDataSold >= GAME_BALANCE.objective.dataSoldTarget)
 const economyGoalComplete = computed(() => netIncomePerMinute.value >= 0)
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
@@ -813,6 +814,36 @@ onBeforeUnmount(() => {
 
     <section class="workspace">
       <aside class="control-panel">
+        <section
+          class="research-project"
+          :class="{ 'research-project--complete': snapshot.flightUnlocked }"
+          aria-labelledby="flight-research-title"
+        >
+          <div class="research-project__eyebrow">
+            <span>ИССЛЕДОВАТЕЛЬСКИЙ ПРОЕКТ</span>
+            <span>{{ snapshot.flightUnlocked ? 'ЗАВЕРШЁН' : 'В РАБОТЕ' }}</span>
+          </div>
+          <div class="research-project__title">
+            <span aria-hidden="true">✦</span>
+            <strong id="flight-research-title">ВОЗДУШНАЯ ЭРА</strong>
+          </div>
+          <div
+            class="research-project__progress"
+            role="progressbar"
+            aria-label="Прогресс исследования Воздушная эра"
+            :aria-valuenow="Math.min(totalScience, GAME_BALANCE.science.flightUnlockProgress)"
+            aria-valuemin="0"
+            :aria-valuemax="GAME_BALANCE.science.flightUnlockProgress"
+          >
+            <span :style="{ width: `${flightResearchProgress}%` }"></span>
+          </div>
+          <div class="research-project__value">
+            <strong>{{ formatGameNumber(Math.min(totalScience, GAME_BALANCE.science.flightUnlockProgress)) }} / {{ formatGameNumber(GAME_BALANCE.science.flightUnlockProgress) }}</strong>
+            <span>НАУКИ</span>
+          </div>
+          <p v-if="snapshot.flightUnlocked">Коты могут летать напрямую между модулями.</p>
+          <p v-else>Назначайте котов в исследовательские модули, чтобы приблизить научный прорыв.</p>
+        </section>
         <section class="objective-card" :class="{ 'objective-card--achieved': snapshot.goal.achieved }" aria-labelledby="objective-title">
           <div class="objective-card__heading">
             <span>ЦЕЛЬ PoC</span>
@@ -820,7 +851,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="objective-condition" :class="{ 'objective-condition--complete': scienceGoalComplete }">
             <span aria-hidden="true">{{ scienceGoalComplete ? '✓' : '○' }}</span>
-            <div><small>ВОЗДУШНАЯ ЭРА</small><strong>{{ formatGameNumber(Math.min(totalScience, GAME_BALANCE.science.flightUnlockProgress)) }} / {{ formatGameNumber(GAME_BALANCE.science.flightUnlockProgress) }}</strong></div>
+            <div><small>ВОЗДУШНАЯ ЭРА</small><strong>{{ scienceGoalComplete ? 'ЗАВЕРШЕНА' : 'ИССЛЕДУЕТСЯ' }}</strong></div>
           </div>
           <div class="objective-condition" :class="{ 'objective-condition--complete': salesGoalComplete }">
             <span aria-hidden="true">{{ salesGoalComplete ? '✓' : '○' }}</span>
@@ -838,7 +869,6 @@ onBeforeUnmount(() => {
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.server.cost" @click="createNode('server')"><span>▦</span> Сервер · {{ formatGameNumber(GAME_BALANCE.nodes.server.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.terminal.cost" @click="createNode('terminal')"><span>₡</span> Торговый терминал · {{ formatGameNumber(GAME_BALANCE.nodes.terminal.cost) }}</button>
         <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.hub.cost" @click="createNode('hub')"><span>◆</span> Дорожный хаб · {{ formatGameNumber(GAME_BALANCE.nodes.hub.cost) }}</button>
-        <p v-if="snapshot.flightUnlocked" class="flight-era-note">✦ ВОЗДУШНАЯ ЭРА · коты летают напрямую</p>
         <p v-if="snapshot.economy.debtWarning" class="debt-warning">ЛАБОРАТОРИЯ ЗАКРЫТА · ранний доступ позволяет продолжить восстановление.</p>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>

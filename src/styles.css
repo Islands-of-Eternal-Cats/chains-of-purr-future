@@ -62,6 +62,23 @@ button { font: inherit; }
 
 .workspace { height: calc(100vh - 82px); display: grid; grid-template-columns: 264px minmax(0, 1fr); }
 .control-panel { position: relative; z-index: 2; overflow-y: auto; padding: 26px 18px 30px; border-right: 1px solid rgba(151, 180, 198, .15); background: linear-gradient(180deg, rgba(14, 22, 34, .96), rgba(8, 13, 22, .96)); }
+.research-project { margin: 0 0 12px; padding: 13px 12px; border: 1px solid rgba(103, 226, 255, .42); border-radius: 3px; background: linear-gradient(145deg, rgba(38, 116, 139, .15), rgba(23, 54, 72, .08)); box-shadow: inset 0 0 24px rgba(64, 195, 224, .035); }
+.research-project--complete { border-color: rgba(120, 205, 151, .5); background: linear-gradient(145deg, rgba(68, 153, 88, .12), rgba(23, 64, 48, .07)); }
+.research-project__eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #6d8798; font: 500 7px/1.2 'DM Mono', monospace; letter-spacing: .1em; }
+.research-project__eyebrow span:last-child { color: #83cee2; }
+.research-project--complete .research-project__eyebrow span:last-child { color: #8de2a2; }
+.research-project__title { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; }
+.research-project__title span { color: #8ceaff; font-size: 17px; text-shadow: 0 0 15px rgba(99, 220, 255, .75); }
+.research-project__title strong { color: #dff8ff; font: 600 11px/1.2 'DM Mono', monospace; letter-spacing: .07em; }
+.research-project--complete .research-project__title span { color: #8de2a2; text-shadow: 0 0 15px rgba(120, 205, 151, .6); }
+.research-project__progress { height: 6px; overflow: hidden; border-radius: 2px; background: rgba(139, 160, 173, .13); box-shadow: inset 0 0 0 1px rgba(151, 180, 198, .1); }
+.research-project__progress span { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #3fb8d5, #8ceaff); box-shadow: 0 0 10px rgba(99, 220, 255, .55); transition: width .2s ease; }
+.research-project--complete .research-project__progress span { background: linear-gradient(90deg, #58b879, #9aebab); box-shadow: 0 0 10px rgba(120, 205, 151, .45); }
+.research-project__value { display: flex; align-items: baseline; gap: 5px; margin-top: 7px; }
+.research-project__value strong { color: #a8efff; font: 600 10px/1 'DM Mono', monospace; font-variant-numeric: tabular-nums; }
+.research-project__value span { color: #607d8d; font: 500 7px/1 'DM Mono', monospace; letter-spacing: .08em; }
+.research-project--complete .research-project__value strong { color: #8de2a2; }
+.research-project > p { margin: 9px 0 0; color: #7691a0; font: 8px/1.5 'DM Mono', monospace; }
 .objective-card { margin: 0 0 24px; padding: 13px 12px; border: 1px solid rgba(103, 226, 255, .27); border-radius: 3px; background: rgba(38, 116, 139, .08); }
 .objective-card--achieved { border-color: rgba(120, 205, 151, .5); background: rgba(68, 153, 88, .09); }
 .objective-card__heading { display: grid; gap: 4px; margin-bottom: 11px; }
@@ -101,7 +118,6 @@ button { font: inherit; }
 .hint { display: flex; gap: 10px; margin: 25px 4px 0; color: #698094; }
 .hint-number { color: #83cee2; font: 12px 'DM Mono', monospace; }
 .hint p { margin: 0; font-size: 10px; line-height: 1.75; }
-.flight-era-note { margin: 8px 0 12px; padding: 10px; border: 1px solid rgba(104, 229, 255, .35); color: #a6f0ff; background: rgba(30, 135, 158, .12); font: 10px 'DM Mono', monospace; line-height: 1.45; }
 .debt-warning { margin: 8px 0 12px; padding: 10px; border: 1px solid rgba(255, 96, 96, .6); color: #ffd0d0; background: rgba(153, 35, 35, .2); font: 9px/1.45 'DM Mono', monospace; }
 .file-button { cursor: pointer; }
 .file-button input { display: none; }
@@ -205,5 +221,5 @@ button { font: inherit; }
   .workspace { height: calc(100vh - 70px); grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .control-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border-right: 0; border-bottom: 1px solid rgba(151, 180, 198, .15); }
   .panel-label, .panel-rule, .hint { display: none; }.action-button, .hire-button { min-height: 38px; margin: 0; font-size: 10px; }
-  .objective-card, .hire-button, .crew-roster-section { grid-column: span 2; }.objective-card, .crew-roster-section { margin: 0; }.vue-flow__node { width: 260px; }.graph-status { font-size: 9px; }
+  .research-project, .objective-card, .hire-button, .crew-roster-section { grid-column: span 2; }.research-project, .objective-card, .crew-roster-section { margin: 0; }.vue-flow__node { width: 260px; }.graph-status { font-size: 9px; }
 }
