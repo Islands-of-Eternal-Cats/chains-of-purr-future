@@ -64,3 +64,31 @@ The system SHALL visually distinguish an unassigned empty work slot from an assi
 #### Scenario: Player clears an assignment
 - **WHEN** the player selects an assigned but unoccupied work slot without selecting another cat
 - **THEN** the system clears the slot's persistent assignment and keeps the cat in the rest room
+
+#### Scenario: Player clears a working cat's assignment
+- **WHEN** the player selects an occupied work slot and then selects the same slot again
+- **THEN** the system clears the persistent assignment, frees the slot, stops its production contribution, and sends the cat toward rest
+
+#### Scenario: Immediate rest journey is unavailable
+- **WHEN** a player clears a working cat's assignment while no route or rest seat is available
+- **THEN** the old work slot is freed and the cat visibly waits at its current module without contributing production until it can continue toward rest
+
+#### Scenario: Working cat remains productive while selected
+- **WHEN** the player selects an occupied work slot but has not selected a destination yet
+- **THEN** the cat remains in its current slot and continues working without any simulation-state change
+
+#### Scenario: Player transfers a working cat directly
+- **WHEN** the player selects an occupied work slot and then selects an available work slot in another module
+- **THEN** the cat leaves its current slot and travels directly to the new assignment without visiting a rest room
+
+#### Scenario: Player transfers a cat within one module
+- **WHEN** the player selects an occupied work slot and then selects another available slot in the same module
+- **THEN** the cat moves to the new slot immediately and the old slot becomes unassigned
+
+#### Scenario: Transfer route is unavailable
+- **WHEN** a working cat is transferred to a slot that has no available route from the current module
+- **THEN** the old slot is freed, the new slot is assigned and reserved, and the cat visibly waits at the current module until a route appears
+
+#### Scenario: Player cancels worker selection
+- **WHEN** the player presses Escape after selecting a working cat and before selecting a destination
+- **THEN** the selection is cleared and the cat remains assigned to and working in the original slot

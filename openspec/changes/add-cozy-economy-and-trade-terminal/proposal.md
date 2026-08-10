@@ -6,7 +6,7 @@ The current laboratory is a technically complete sandbox but has no resource loo
 
 - Separate cumulative scientific progress from sellable data: active research creates both, while data alone moves through the network and is consumed by trade.
 - Add a staffed trade terminal, credits, construction and hiring costs, continuous upkeep, partial demolition refunds, paid cat dismissal, and recoverable debt warnings.
-- Add directed server output ports and support acyclic `research → server`, `server → server`, and `server → terminal` networks with bounded ports and fair transfer.
+- Add directed server output ports and support acyclic `research → server`, `server → server`, and `server → terminal` networks with server fan-out, bounded terminal inputs, and fair multi-source transfer.
 - Centralize all tunable gameplay values in one typed balance configuration shared by the core, UI, and tests.
 - Add versioned local autosaves, JSON import/export, reset controls, and explicit handling for unsupported or corrupt saves.
 - Hide the ×100 diagnostic speed until the player clicks the brand mark; keep ordinary controls at pause, ×1, ×5, and ×10.

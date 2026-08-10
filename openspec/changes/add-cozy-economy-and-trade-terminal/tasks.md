@@ -6,8 +6,9 @@
 ## 2. Core production and routing
 
 - [x] 2.1 Produce cumulative science and sellable data directly from active research work and unlock flight from science progress.
-- [x] 2.2 Implement compatible data ports, single server outputs, single terminal inputs, duplicate/self/cycle rejection, and safe disconnection.
+- [x] 2.2 Implement compatible data ports, server output connectors, single terminal inputs, duplicate/self/cycle rejection, and safe disconnection.
 - [x] 2.3 Implement fair multi-source server transfer, conserved server relay storage, and automatic terminal sales.
+- [x] 2.4 Allow server output fan-out to multiple servers and terminals while preserving receiver-driven throughput and save compatibility.
 
 ## 3. Core economy and lifecycle
 

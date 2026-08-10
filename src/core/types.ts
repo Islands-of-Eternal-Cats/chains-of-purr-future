@@ -43,7 +43,7 @@ export type CatTravel = RoadTravel | FlightTravel
 
 export interface StrandedTravel {
   targetNodeId: string
-  targetSlotId: string
+  targetSlotId: string | null
   sourceNodeId: string
 }
 

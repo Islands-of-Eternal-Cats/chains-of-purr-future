@@ -73,11 +73,6 @@ const totalScience = computed(() => snapshot.value.scienceProgress)
 const totalData = computed(() => snapshot.value.nodes.reduce((total, node) => total + node.dataBuffer + node.dataStored, 0))
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
 const canDismissSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.id !== 'cat-1'))
-const canReturnSelectedCat = computed(() => Boolean(
-  selectedCat.value
-  && selectedCat.value.status === 'idle'
-  && snapshot.value.nodes.find((node) => node.id === selectedCat.value?.nodeId)?.type !== 'rest',
-))
 
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
@@ -326,41 +321,72 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   const nodeName = snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'
   const result = simulation.assignCat(catId, nodeId, slotId)
   const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === catId) : undefined
-  const success = updatedCat?.status === 'travelling'
+  const success = updatedCat?.status === 'stranded'
+    ? `${cat?.name ?? 'Кот'} переназначен, но путь к новому месту недоступен.`
+    : updatedCat?.status === 'travelling'
     ? `${cat?.name ?? 'Кот'} закреплён за местом и идёт к модулю: ${nodeName}.`
+    : updatedCat?.nodeId === nodeId && updatedCat.slotId === slotId
+      ? `${cat?.name ?? 'Кот'} переназначен на новое место в этом модуле.`
     : (updatedCat?.vigor ?? 0) < GAME_BALANCE.cats.maxVigor
       ? `${cat?.name ?? 'Кот'} закреплён за местом и отправится после полного восстановления.`
       : `${cat?.name ?? 'Кот'} закреплён за местом, но пока не может дойти: слот отмечен красным.`
   report(result, success)
+  return result.ok
 }
 
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
-  if (cat.status === 'travelling' || cat.status === 'stranded') {
+  if (cat.status === 'travelling') {
     status.value = `${cat.name} уже находится в пути.`
+    return
+  }
+  if (cat.status === 'stranded') {
+    status.value = `${cat.name}: путь к назначенной цели недоступен.`
     return
   }
   if (selectedSlot.value) {
     const target = selectedSlot.value
-    assignCatToWorkSlot(catId, target.nodeId, target.slotId)
-    selectedSlot.value = null
-    selectedCatId.value = null
+    if (assignCatToWorkSlot(catId, target.nodeId, target.slotId)) {
+      selectedSlot.value = null
+      selectedCatId.value = null
+    }
     return
   }
   selectedCatId.value = selectedCatId.value === catId ? null : catId
-  status.value = selectedCatId.value ? `${cat.name} выбран. Кликните по рабочему слоту.` : 'Выбор кота отменён.'
+  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
+  status.value = selectedCatId.value
+    ? currentNode?.type !== 'rest' && currentNode?.type !== 'hub' && cat.slotId
+      ? `${cat.name} выбран. Выберите новое рабочее место или нажмите текущий слот ещё раз, чтобы отправить кота отдыхать.`
+      : `${cat.name} выбран. Кликните по рабочему слоту.`
+    : 'Выбор кота отменён.'
 }
 
 function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null, assignedCatId: string | null) {
+  const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
   if (occupiedCatId) {
+    if (selectedCatId.value && occupiedCatId !== selectedCatId.value) {
+      status.value = 'Этот слот уже занят. Выбранный кот остался на текущей работе.'
+      return
+    }
+    if (selectedCatId.value === occupiedCatId && targetNode?.type !== 'rest' && targetNode?.type !== 'hub') {
+      const cat = catIndex.value[occupiedCatId]
+      const result = simulation.releaseCat(occupiedCatId)
+      const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === occupiedCatId) : undefined
+      report(result, updatedCat?.status === 'travelling'
+        ? `${cat?.name ?? 'Кот'} снят с работы и идёт отдыхать.`
+        : `${cat?.name ?? 'Кот'} снят с работы, но путь к отдыху недоступен.`)
+      if (result.ok) selectedCatId.value = null
+      return
+    }
     selectCat(occupiedCatId)
     return
   }
   if (reservedCatId) {
-    status.value = `${catIndex.value[reservedCatId]?.name ?? 'Кот'} уже идёт к этому слоту.`
+    status.value = selectedCatId.value
+      ? 'Этот слот уже зарезервирован. Выбранный кот остался на текущей работе.'
+      : `${catIndex.value[reservedCatId]?.name ?? 'Кот'} уже идёт к этому слоту.`
     return
   }
-  const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
   if (targetNode?.type === 'rest') {
     status.value = 'Все кресла в комнате отдыха используются совместно.'
     return
@@ -376,15 +402,14 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
     status.value = wasSelected ? 'Выбор слота отменён.' : 'Слот выбран. Теперь выберите кота.'
     return
   }
-  assignCatToWorkSlot(selectedCatId.value, nodeId, slotId)
-  selectedCatId.value = null
+  if (assignCatToWorkSlot(selectedCatId.value, nodeId, slotId)) selectedCatId.value = null
 }
 
-function returnSelectedCat() {
-  if (!selectedCat.value) return
-  const cat = selectedCat.value
-  report(simulation.releaseCat(cat.id), `${cat.name} идёт в комнату отдыха.`)
+function cancelCatSelection(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || (!selectedCatId.value && !selectedSlot.value)) return
   selectedCatId.value = null
+  selectedSlot.value = null
+  status.value = 'Выбор кота или слота отменён.'
 }
 
 function onConnect(connection: FlowConnection) {
@@ -573,8 +598,12 @@ function animate(time: number) {
   frame = requestAnimationFrame(animate)
 }
 
-onMounted(() => { frame = requestAnimationFrame(animate) })
+onMounted(() => {
+  window.addEventListener('keydown', cancelCatSelection)
+  frame = requestAnimationFrame(animate)
+})
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', cancelCatSelection)
   cancelAnimationFrame(frame)
   if (autosaveTimer) clearTimeout(autosaveTimer)
   saveLocalNow()
@@ -635,7 +664,6 @@ onBeforeUnmount(() => {
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
         <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ GAME_BALANCE.economy.hireCatCost }}</button>
-        <button class="action-button" type="button" :disabled="!canReturnSelectedCat" @click="returnSelectedCat"><span>↶</span> Вернуть выбранного кота</button>
         <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ GAME_BALANCE.economy.dismissCatCost }}</button>
         <div class="panel-rule"></div>
         <p class="panel-label">СОХРАНЕНИЕ</p>

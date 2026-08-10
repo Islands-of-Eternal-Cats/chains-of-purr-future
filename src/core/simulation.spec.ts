@@ -291,6 +291,131 @@ describe('Simulation rest seating', () => {
     expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
   })
 
+  it('releases an assigned working cat immediately and sends it directly to rest', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+
+    expect(simulation.clearWorkAssignment(research.id, research.slots[0].id)).toMatchObject({ ok: false })
+    expect(simulation.releaseCat('cat-1')).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: null, status: 'travelling', travel: { targetNodeId: 'rest-1' } })
+  })
+
+  it('moves a working cat directly to a slot in another module', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing transfer network')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(2)
+
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(research.value.id).not.toBe(server.value.id)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === research.value.id)?.slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === server.value.id)?.slots[0]).toMatchObject({ catId: null, assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.value.id, slotId: null, status: 'travelling', travel: { targetNodeId: server.value.id } })
+
+    simulation.tick(2)
+    expect(cat(simulation)).toMatchObject({ nodeId: server.value.id, slotId: server.value.slots[0].id, status: 'idle' })
+  })
+
+  it('moves a working cat instantly between slots in the same module', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+
+    expect(simulation.assignCat('cat-1', research.id, research.slots[1].id)).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+    expect(node(simulation, 'research').slots[1]).toMatchObject({ catId: 'cat-1', assignedCatId: 'cat-1', reservedByCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: research.slots[1].id, status: 'idle' })
+  })
+
+  it('keeps a worker in its source slot when the transfer target is occupied', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing occupied-target setup')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.assignCat('cat-2', server.value.id, server.value.slots[0].id)
+    simulation.tick(2)
+
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: false, reason: expect.stringContaining('занят') })
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === research.value.id)?.slots[0]).toMatchObject({ catId: 'cat-1', assignedCatId: 'cat-1' })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.value.id, slotId: research.value.slots[0].id, status: 'idle' })
+  })
+
+  it('strands a transferred worker at its source until a route to the new job appears', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    const server = simulation.createNode('server')
+    if (!server.ok) throw new Error(server.reason)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: null, status: 'stranded', stranded: { targetNodeId: server.value.id, targetSlotId: server.value.slots[0].id } })
+
+    const oldRoad = simulation.snapshot().workerLinks[0]
+    simulation.disconnectWorkerLink(oldRoad.id)
+    simulation.connectWorkerNodes(research.id, server.value.id, 1)
+    expect(cat(simulation)).toMatchObject({ status: 'travelling', travel: { targetNodeId: server.value.id } })
+  })
+
+  it('keeps a released worker stranded until a rest seat becomes available', () => {
+    let simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+    simulation.hireCat()
+
+    expect(node(simulation, 'rest').slots.every((slot) => slot.catId)).toBe(true)
+    expect(simulation.releaseCat('cat-1')).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: null, status: 'stranded', stranded: { targetNodeId: 'rest-1', targetSlotId: null } })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+
+    const restored = Simulation.fromSave(simulation.exportSave())
+    if (!restored.ok) throw new Error(restored.reason)
+    simulation = restored.value
+    expect(cat(simulation)).toMatchObject({ status: 'stranded', stranded: { targetNodeId: 'rest-1', targetSlotId: null } })
+
+    expect(simulation.assignCat('cat-2', research.id, research.slots[1].id)).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ status: 'travelling', travel: { targetNodeId: 'rest-1', targetSlotId: 'rest-1-slot-2' } })
+  })
+
+  it('releases a worker from its slot even when the route to rest is unavailable', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+    const road = simulation.snapshot().workerLinks[0]
+    simulation.disconnectWorkerLink(road.id)
+
+    expect(simulation.releaseCat('cat-1')).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ catId: null, assignedCatId: null })
+    expect(node(simulation, 'rest').slots[0]).toMatchObject({ reservedByCatId: 'cat-1' })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: null, status: 'stranded', stranded: { targetNodeId: 'rest-1', targetSlotId: 'rest-1-slot-1' } })
+
+    simulation.connectWorkerNodes(research.id, 'rest-1', 1)
+    expect(cat(simulation)).toMatchObject({ status: 'travelling', travel: { targetNodeId: 'rest-1' } })
+  })
+
   it('keeps a full cat assigned without a route and starts the journey when a route appears', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
@@ -587,23 +712,55 @@ describe('Simulation cozy economy and data network', () => {
     expect(simulation.snapshot().connections).toHaveLength(0)
   })
 
-  it('enforces the directed data compatibility matrix, bounded ports, and cycle rejection', () => {
+  it('enforces the directed data compatibility matrix, server fan-out, bounded terminal inputs, and cycle rejection', () => {
     const simulation = fundedSimulation()
     const research = simulation.createNode('research')
     const first = simulation.createNode('server')
     const second = simulation.createNode('server')
     const third = simulation.createNode('server')
-    const terminal = simulation.createNode('terminal')
-    if (!research.ok || !first.ok || !second.ok || !third.ok || !terminal.ok) throw new Error('Missing data nodes')
+    const firstTerminal = simulation.createNode('terminal')
+    const secondTerminal = simulation.createNode('terminal')
+    if (!research.ok || !first.ok || !second.ok || !third.ok || !firstTerminal.ok || !secondTerminal.ok) throw new Error('Missing data nodes')
 
-    expect(simulation.connect(research.value.id, terminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Несовместимые') })
+    expect(simulation.connect(research.value.id, firstTerminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Несовместимые') })
     expect(simulation.connect(first.value.id, first.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('самим собой') })
     expect(simulation.connect(research.value.id, first.value.id).ok).toBe(true)
     expect(simulation.connect(first.value.id, second.value.id).ok).toBe(true)
     expect(simulation.connect(second.value.id, first.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('цикл') })
-    expect(simulation.connect(second.value.id, terminal.value.id).ok).toBe(true)
-    expect(simulation.connect(second.value.id, third.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('занят') })
-    expect(simulation.connect(third.value.id, terminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Вход') })
+    expect(simulation.connect(second.value.id, firstTerminal.value.id).ok).toBe(true)
+    expect(simulation.connect(second.value.id, secondTerminal.value.id).ok).toBe(true)
+    expect(simulation.connect(second.value.id, third.value.id).ok).toBe(true)
+    expect(simulation.connect(second.value.id, firstTerminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('уже существует') })
+    expect(simulation.connect(third.value.id, firstTerminal.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('Вход') })
+    expect(simulation.connect(third.value.id, second.value.id)).toMatchObject({ ok: false, reason: expect.stringContaining('цикл') })
+  })
+
+  it('lets multiple terminals pull independently from one server and round-trips the fan-out save', () => {
+    let simulation = fundedSimulation()
+    const server = simulation.createNode('server')
+    const relay = simulation.createNode('server')
+    const firstTerminal = simulation.createNode('terminal')
+    const secondTerminal = simulation.createNode('terminal')
+    if (!server.ok || !relay.ok || !firstTerminal.ok || !secondTerminal.ok) throw new Error('Missing fan-out nodes')
+
+    expect(simulation.connect(server.value.id, relay.value.id).ok).toBe(true)
+    expect(simulation.connect(server.value.id, firstTerminal.value.id).ok).toBe(true)
+    expect(simulation.connect(server.value.id, secondTerminal.value.id).ok).toBe(true)
+
+    const save = simulation.exportSave()
+    save.simulation.nodes.find((candidate) => candidate.id === server.value.id)!.dataStored = 2
+    const restored = Simulation.fromSave(save)
+    if (!restored.ok) throw new Error(restored.reason)
+    expect(restored.value.exportSave()).toEqual(save)
+    simulation = restored.value
+
+    simulation.tick(1)
+    const snapshot = simulation.snapshot()
+    expect(snapshot.nodes.find((candidate) => candidate.id === relay.value.id)?.dataStored).toBeCloseTo(0.5)
+    expect(snapshot.nodes.find((candidate) => candidate.id === firstTerminal.value.id)?.dataSold).toBeCloseTo(0.25)
+    expect(snapshot.nodes.find((candidate) => candidate.id === secondTerminal.value.id)?.dataSold).toBeCloseTo(0.25)
+    expect(snapshot.nodes.find((candidate) => candidate.id === server.value.id)?.outputRate).toBeCloseTo(1)
+    expect(snapshot.nodes.find((candidate) => candidate.id === server.value.id)?.dataStored).toBeCloseTo(1)
   })
 
   it('shares server input fairly, conserves relayed data, and sells terminal inventory', () => {

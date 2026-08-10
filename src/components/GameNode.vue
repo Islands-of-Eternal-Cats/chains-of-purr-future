@@ -106,6 +106,7 @@ const nodeSubtitles = {
           class="worker-slot nodrag nopan"
           :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--unassigned': isUnassignedRestCat(slot), 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
           type="button"
+          :title="data.node.type !== 'rest' && slot.catId ? 'Нажмите, чтобы выбрать кота. Повторный клик отправит его отдыхать.' : undefined"
           :disabled="data.blocked"
           @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
         >

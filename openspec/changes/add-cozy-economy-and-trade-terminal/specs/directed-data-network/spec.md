@@ -12,11 +12,15 @@ Each active research work-second SHALL add one configured unit to global scienti
 - **THEN** scientific progress and that module's data buffer each increase by their configured amounts
 
 ### Requirement: Data ports enforce compatible topology
-The system SHALL allow `research → server`, `server → server`, and `server → terminal` data connections. It MUST reject all other type pairs, self-connections, duplicate connections, a second outgoing connection from a server, and a second incoming connection to a terminal.
+The system SHALL allow `research → server`, `server → server`, and `server → terminal` data connections. Research modules and servers MAY connect their single visual output to multiple compatible destinations. The system MUST reject all other type pairs, self-connections, duplicate connections, and a second incoming connection to a terminal.
 
 #### Scenario: Server relays to another server
 - **WHEN** the player connects a server output to a different server input and both ports are available
 - **THEN** the directed connection is created
+
+#### Scenario: Server output fans out
+- **WHEN** a server already has an outgoing connection and the player connects its output to another compatible destination
+- **THEN** the additional directed connection is created from the same output
 
 #### Scenario: Terminal cannot bypass a server
 - **WHEN** the player attempts to connect research directly to a trade terminal
@@ -30,11 +34,15 @@ Creating a connection MUST be rejected when it would introduce a directed cycle 
 - **THEN** the new connection is rejected and the existing path remains unchanged
 
 ### Requirement: Servers store and move data without duplication
-A server SHALL accept data from any number of compatible incoming connections, keep received data in unbounded local storage, and expose it through its single output. Transfer MUST remove exactly the amount added to the destination, and a server without an output SHALL retain its stored data.
+A server SHALL accept data from any number of compatible incoming connections, keep received data in unbounded local storage, and expose it to any number of compatible destinations through its single visual output. Each destination SHALL pull independently according to its own input capacity, and the server's reported output rate SHALL equal the sum transferred to all destinations during the tick. Transfer MUST remove exactly the amount added to the destination, and a server without an output SHALL retain its stored data.
 
 #### Scenario: Relay preserves total data
 - **WHEN** data moves from an upstream server into a downstream server
 - **THEN** the upstream decrease equals the downstream increase
+
+#### Scenario: Multiple terminals drain one server
+- **WHEN** two trade terminals are connected to one server containing enough stored data
+- **THEN** both terminals consume data up to their own capacity and the server reports their combined transfer rate
 
 ### Requirement: Shared input capacity is fair
 When a server has multiple non-empty incoming sources, its available input capacity SHALL be divided evenly among those sources for the tick, with unused shares redistributed among sources that still contain data. Ordering connections MUST NOT permanently starve a source.
@@ -42,4 +50,3 @@ When a server has multiple non-empty incoming sources, its available input capac
 #### Scenario: Two sources share server capacity
 - **WHEN** two connected sources both contain at least the server's per-source share of data
 - **THEN** each supplies an equal amount during that tick
-

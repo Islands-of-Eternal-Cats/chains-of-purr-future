@@ -84,6 +84,31 @@ describe('GameNode', () => {
     expect(wrapper.text()).toContain('отдых недоступен')
   })
 
+  it('exposes two-step selection from an occupied work slot while keeping the cat name selectable', async () => {
+    const onCatClick = vi.fn()
+    const onSlotClick = vi.fn()
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: 'cat-1', reservedByCatId: null, assignedCatId: 'cat-1' }], dataBuffer: 0, dataStored: 0, productionRate: 1, inputRate: 0, dataSold: 0, outputRate: 0 },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: 'slot-1', status: 'idle', travel: null, vigor: 75 } },
+          restWaitingCats: [], selectedCatId: 'cat-1', selectedSlotId: null, onCatClick, onSlotClick,
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+
+    expect(wrapper.find('.worker-slot').classes()).toContain('worker-slot--selected')
+    expect(wrapper.find('.worker-slot').attributes('title')).toContain('Повторный клик')
+    await wrapper.find('.worker-slot').trigger('click')
+    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', 'cat-1', null, 'cat-1')
+
+    await wrapper.find('.cat-name').trigger('click')
+    expect(onCatClick).toHaveBeenCalledWith('cat-1')
+    expect(onSlotClick).toHaveBeenCalledTimes(1)
+  })
+
   it('renders a stranded cat at an ordinary module', () => {
     const wrapper = mount(GameNode, {
       props: {

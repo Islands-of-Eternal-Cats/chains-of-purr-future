@@ -28,7 +28,7 @@ The simulation core owns all durable rules in memory, while `App.vue` converts u
 
 ### Pull through an acyclic directed graph
 
-Destinations pull from their incoming connections during each tick. Research can fan out, servers aggregate multiple inputs but have one output, and terminals have one input. Cycle detection runs before connection creation. Fair allocation repeatedly gives each non-empty source an equal share of remaining capacity, redistributing unused shares until capacity or data is exhausted. This avoids insertion-order starvation without adding player-configurable priorities.
+Destinations pull from their incoming connections during each tick. Research and servers can fan out through one visual output connector, while terminals have one input. Each destination independently applies its own input capacity, so a server's `outputRate` is the sum actually pulled by all downstream servers and terminals rather than a separate server-side limit. Cycle detection runs before connection creation. Fair allocation repeatedly gives each non-empty source an equal share of a destination's remaining capacity, redistributing unused shares until capacity or data is exhausted. This avoids insertion-order starvation among a destination's sources without adding player-configurable priorities; destinations continue to run in deterministic simulation order.
 
 ### Apply sales and upkeep as one deterministic tick delta
 
@@ -46,7 +46,7 @@ The normal speed list omits ×100. A button-based brand mark reveals it for the 
 
 - [Large cross-cutting snapshot change] → Use explicit copy/validation helpers and round-trip tests before wiring browser persistence.
 - [Coarse ×100 ticks can expose allocation drift] → Base economy and transfer math on elapsed seconds and test large-tick equivalence within floating-point tolerance.
-- [One server output limits existing fan-out expectations] → The restriction applies only to servers; research retains existing fan-out behavior.
+- [Server fan-out can favor earlier destinations when stored data runs low] → Keep deterministic destination order and let players disconnect routes to control flow; add destination fairness only if this becomes visible in play.
 - [Autosave may write every animation frame] → Save only when serialized durable state changes and debounce writes.
 - [Unsupported saves frustrate players] → Keep the original text available for re-export, explain the early-development policy, and make reset explicit.
 
