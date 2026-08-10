@@ -1,11 +1,15 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-export default defineConfig({
-  plugins: [vue()],
-  test: {
-    environment: 'jsdom',
-    base: command === 'build' ? '/имя_вашего_репозитория/' : '/',
-    include: ['src/**/*.spec.ts'],
-  },
+// Обратите внимание на фигурные скобки вокруг command!
+export default defineConfig(({ command }) => {
+  return {
+    plugins: [vue()],
+    // Локально будет '/', на GitHub Pages — '/chains-of-purr-future/'
+    base: command === 'build' ? '/chains-of-purr-future/' : '/',
+    test: {
+      environment: 'jsdom',
+      include: ['src/**/*.spec.ts'],
+    },
+  }
 })
