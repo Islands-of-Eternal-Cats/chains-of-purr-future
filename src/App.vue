@@ -637,6 +637,17 @@ function acknowledgeEarlyWarning() {
 
 let frame = 0
 let previousTime = 0
+const MAX_SIMULATION_STEP_SECONDS = 0.1
+
+function advanceSimulation(deltaSeconds: number) {
+  let remainingSeconds = deltaSeconds
+  while (remainingSeconds > 0.000000001) {
+    const stepSeconds = Math.min(remainingSeconds, MAX_SIMULATION_STEP_SECONDS)
+    simulation.tick(stepSeconds)
+    remainingSeconds -= stepSeconds
+  }
+}
+
 function animate(time: number) {
   const elapsed = previousTime ? Math.min((time - previousTime) / 1000, 0.25) : 0
   previousTime = time
@@ -644,7 +655,7 @@ function animate(time: number) {
   if (delta > 0) {
     const wasFlightUnlocked = snapshot.value.flightUnlocked
     const travellingCats = new Set(snapshot.value.cats.filter((cat) => cat.status === 'travelling').map((cat) => cat.id))
-    simulation.tick(delta)
+    advanceSimulation(delta)
     sync()
     const arrivedCat = snapshot.value.cats.find((cat) => travellingCats.has(cat.id) && cat.status === 'idle')
     if (!wasFlightUnlocked && snapshot.value.flightUnlocked) {

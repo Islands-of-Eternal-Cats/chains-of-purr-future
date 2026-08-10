@@ -251,6 +251,28 @@ describe('App economy controls', () => {
     wrapper.unmount()
   })
 
+  it('splits accelerated simulation time into bounded substeps', async () => {
+    let animationFrame: FrameRequestCallback = () => undefined
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      animationFrame = callback
+      return 1
+    }))
+    const tick = vi.spyOn(Simulation.prototype, 'tick')
+    const wrapper = mount(App, {
+      global: { stubs: { VueFlow: VueFlowStub } },
+    })
+
+    await wrapper.find('.brand-mark').trigger('click')
+    await wrapper.findAll('.speed-button').at(-1)!.trigger('click')
+    animationFrame(1_000)
+    animationFrame(1_010)
+
+    expect(tick).toHaveBeenCalledTimes(10)
+    expect(tick.mock.calls.every(([deltaSeconds]) => deltaSeconds <= 0.1)).toBe(true)
+    expect(tick.mock.calls.reduce((total, [deltaSeconds]) => total + deltaSeconds, 0)).toBeCloseTo(1)
+    wrapper.unmount()
+  })
+
   it('does not use speed shortcuts with modifiers or from editable controls', async () => {
     const wrapper = mount(App, {
       global: { stubs: { VueFlow: VueFlowStub } },
