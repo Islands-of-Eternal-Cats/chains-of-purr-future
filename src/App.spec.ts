@@ -75,6 +75,7 @@ describe('App economy controls', () => {
     })
 
     expect(wrapper.text()).toContain(`Торговый терминал · ${GAME_BALANCE.nodes.terminal.cost}.00`)
+    expect(wrapper.find('.app-version').text()).toBe('v0.2.0')
     expect(wrapper.find('.science-readout').text()).toContain('0.00/ 0.00')
     expect(wrapper.find('.economy-readout strong').text()).toBe('1000.00')
     expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1.00', '×5.00', '×10.00'])
@@ -104,6 +105,87 @@ describe('App economy controls', () => {
     expect(wrapper.find('.science-readout em').text()).toBe('/ 0.25')
     expect(wrapper.find('.economy-readout strong').text()).toBe('999.26')
     expect(wrapper.find('[data-label="0.63с"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('lists every unassigned cat state, excludes assigned cats, and reuses cat selection', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-3', research.value.id, research.value.slots[0].id)
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const roster = wrapper.find('.crew-roster-section')
+    const buttons = roster.findAll('.crew-cat-button')
+    expect(roster.find('.crew-roster-heading strong').text()).toBe('3')
+    expect(buttons.map((button) => button.text())).toEqual(expect.arrayContaining([
+      expect.stringContaining('Мираготов к работе'),
+      expect.stringContaining('Ноксготов к работе'),
+      expect.stringContaining('Инейждёт кресло'),
+    ]))
+    expect(roster.text()).not.toContain('Север')
+
+    const noxButton = buttons.find((button) => button.text().includes('Нокс'))!
+    await noxButton.trigger('click')
+    expect(noxButton.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('.graph-status').text()).toContain('Нокс выбран')
+    await noxButton.trigger('click')
+    expect(noxButton.attributes('aria-pressed')).toBe('false')
+    expect(wrapper.find('.graph-status').text()).toContain('Выбор кота отменён')
+
+    await noxButton.trigger('click')
+    await wrapper.find(`.slot-${research.value.slots[1].id}`).trigger('click')
+    expect(wrapper.find('.crew-roster-heading strong').text()).toBe('2')
+    expect(wrapper.find('.crew-roster-section').text()).not.toContain('Нокс')
+    wrapper.unmount()
+  })
+
+  it('shows travelling and stranded cats without assignments', () => {
+    const travellingSimulation = new Simulation()
+    const travellingResearch = travellingSimulation.createNode('research')
+    if (!travellingResearch.ok) throw new Error(travellingResearch.reason)
+    travellingSimulation.connectWorkerNodes('rest-1', travellingResearch.value.id, 1)
+    travellingSimulation.assignCat('cat-1', travellingResearch.value.id, travellingResearch.value.slots[0].id)
+    travellingSimulation.tick(1)
+    travellingSimulation.releaseCat('cat-1')
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(travellingSimulation.exportSave()))
+
+    const travellingWrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    expect(travellingWrapper.find('.crew-cat-button').text()).toContain('в пути')
+    travellingWrapper.unmount()
+
+    const strandedSimulation = new Simulation()
+    const strandedResearch = strandedSimulation.createNode('research')
+    if (!strandedResearch.ok) throw new Error(strandedResearch.reason)
+    const road = strandedSimulation.connectWorkerNodes('rest-1', strandedResearch.value.id, 1)
+    if (!road.ok) throw new Error(road.reason)
+    strandedSimulation.assignCat('cat-1', strandedResearch.value.id, strandedResearch.value.slots[0].id)
+    strandedSimulation.tick(1)
+    strandedSimulation.disconnectWorkerLink(road.value.id)
+    strandedSimulation.releaseCat('cat-1')
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(strandedSimulation.exportSave()))
+
+    const strandedWrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    expect(strandedWrapper.find('.crew-cat-button').text()).toContain('путь недоступен')
+    strandedWrapper.unmount()
+  })
+
+  it('shows a neutral crew state when every cat has an assignment', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    expect(wrapper.find('.crew-roster-heading strong').text()).toBe('0')
+    expect(wrapper.find('.crew-roster-empty').text()).toBe('ВСЕ КОТЫ НАЗНАЧЕНЫ')
+    expect(wrapper.findAll('.crew-cat-button')).toHaveLength(0)
     wrapper.unmount()
   })
 

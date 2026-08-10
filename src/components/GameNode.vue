@@ -8,7 +8,7 @@ interface NodeViewData {
   blocked?: boolean
   cats: Record<string, Cat>
   unreachableCatIds?: string[]
-  unassignedRestCatIds?: string[]
+  unassignedCatIds?: string[]
   restWaitingCats: Cat[]
   strandedCats?: Cat[]
   selectedCatId: string | null
@@ -41,7 +41,7 @@ function cannotReachAssignedWork(catId: string) {
 }
 
 function isUnassignedRestCat(slot: WorkSlot) {
-  return props.data.node.type === 'rest' && Boolean(slot.catId && props.data.unassignedRestCatIds?.includes(slot.catId))
+  return props.data.node.type === 'rest' && Boolean(slot.catId && props.data.unassignedCatIds?.includes(slot.catId))
 }
 
 function representsSelectedCat(slot: WorkSlot) {

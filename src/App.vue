@@ -5,7 +5,7 @@ import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, 
 import GameNode from './components/GameNode.vue'
 import CatFlightEdge from './components/CatFlightEdge.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
-import { formatGameNumber } from './formatGameNumber'
+import { formatGameNumber, formatVigor } from './formatGameNumber'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
@@ -14,6 +14,7 @@ type SpeedOption = { value: SimulationSpeed; label: string; shortcut?: string }
 
 const SAVE_KEY = 'catmand-save-v1'
 const SAVE_WARNING_KEY = 'catmand-save-warning-acknowledged'
+const appVersion = __APP_VERSION__
 let initialSaveError = ''
 let invalidStoredSave = ''
 let simulation = new Simulation()
@@ -57,10 +58,8 @@ const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snaps
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
 const assignedCatIds = computed(() => new Set(snapshot.value.nodes.flatMap((node) => node.slots.flatMap((slot) => slot.assignedCatId ? [slot.assignedCatId] : []))))
-const unassignedRestCatIds = computed(() => snapshot.value.cats.flatMap((cat) => {
-  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
-  return cat.status === 'idle' && cat.slotId && currentNode?.type === 'rest' && !assignedCatIds.value.has(cat.id) ? [cat.id] : []
-}))
+const unassignedCats = computed(() => snapshot.value.cats.filter((cat) => !assignedCatIds.value.has(cat.id)))
+const unassignedCatIds = computed(() => unassignedCats.value.map((cat) => cat.id))
 const unreachableCatIds = computed(() => snapshot.value.nodes.flatMap((node) => node.type === 'rest' || node.type === 'hub' ? [] : node.slots.flatMap((slot) => {
   const cat = slot.assignedCatId ? catIndex.value[slot.assignedCatId] : undefined
   return !slot.catId
@@ -80,6 +79,15 @@ const canDismissSelectedCat = computed(() => Boolean(selectedCat.value && select
 function nodePosition(node: SimNode): Point {
   if (positions.value[node.id]) return positions.value[node.id]
   return node.position && (node.position.x || node.position.y) ? node.position : defaultNodePosition(node.type)
+}
+
+function unassignedCatState(cat: Cat) {
+  if (cat.status === 'stranded') return 'путь недоступен'
+  if (cat.status === 'travelling') return 'в пути'
+  const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
+  if (currentNode?.type !== 'rest') return 'без работы'
+  if (!cat.slotId) return 'ждёт кресло'
+  return cat.vigor >= GAME_BALANCE.cats.maxVigor ? 'готов к работе' : 'восстанавливается'
 }
 
 function defaultNodePosition(type: NodeType): Point {
@@ -134,7 +142,7 @@ const flowNodes = computed<Node[]>(() => {
       blocked: node.blocked,
       cats: catIndex.value,
       unreachableCatIds: unreachableCatIds.value,
-      unassignedRestCatIds: unassignedRestCatIds.value,
+      unassignedCatIds: unassignedCatIds.value,
       restWaitingCats: node.type === 'rest' ? snapshot.value.cats.filter((cat) => cat.nodeId === node.id && !cat.slotId && cat.status === 'idle') : [],
       strandedCats: snapshot.value.cats.filter((cat) => cat.nodeId === node.id && cat.status === 'stranded'),
       selectedCatId: selectedCatId.value,
@@ -657,7 +665,7 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <div class="brand">
         <button class="brand-mark" type="button" aria-label="Логотип лаборатории" @click="unlockDiagnosticSpeed">✦</button>
-        <div><p>PURRFECT / SECTOR 07</p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
+        <div><p>PURRFECT / SECTOR 07 <span class="app-version">v{{ appVersion }}</span></p><h1>ДАТА-ЛАБОРАТОРИЯ</h1></div>
       </div>
       <div class="topbar-actions">
         <div class="speed-control" aria-label="Скорость симуляции">
@@ -699,6 +707,26 @@ onBeforeUnmount(() => {
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
         <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ formatGameNumber(GAME_BALANCE.economy.hireCatCost) }}</button>
+        <section class="crew-roster-section" aria-label="Коты без работы">
+          <div class="crew-roster-heading"><span>БЕЗ РАБОТЫ</span><strong>{{ unassignedCats.length }}</strong></div>
+          <div v-if="unassignedCats.length" class="crew-roster-list">
+            <button
+              v-for="cat in unassignedCats"
+              :key="cat.id"
+              class="crew-cat-button"
+              :class="{ 'crew-cat-button--selected': selectedCatId === cat.id }"
+              type="button"
+              :aria-pressed="selectedCatId === cat.id"
+              :title="`Выбрать ${cat.name} для назначения на работу`"
+              @click="selectCat(cat.id)"
+            >
+              <span class="crew-cat-glyph" aria-hidden="true">{{ cat.variant }}</span>
+              <span class="crew-cat-details"><strong>{{ cat.name }}</strong><small>{{ unassignedCatState(cat) }}</small></span>
+              <span class="crew-cat-vigor" title="Бодрость">{{ formatVigor(cat.vigor) }}</span>
+            </button>
+          </div>
+          <p v-else class="crew-roster-empty">ВСЕ КОТЫ НАЗНАЧЕНЫ</p>
+        </section>
         <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ formatGameNumber(GAME_BALANCE.economy.dismissCatCost) }}</button>
         <div class="panel-rule"></div>
         <p class="panel-label">СОХРАНЕНИЕ</p>
