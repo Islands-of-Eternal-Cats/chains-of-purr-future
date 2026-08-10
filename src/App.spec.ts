@@ -20,6 +20,7 @@ const VueFlowStub = {
         :key="edge.id"
         class="flow-edge-stub"
         :data-edge-id="edge.id"
+        :data-label="edge.label"
       />
       <template v-for="node in nodes" :key="node.id + '-slots'">
         <button
@@ -73,12 +74,36 @@ describe('App economy controls', () => {
       },
     })
 
-    expect(wrapper.text()).toContain(`Торговый терминал · ${GAME_BALANCE.nodes.terminal.cost}`)
-    expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1', '×5', '×10'])
+    expect(wrapper.text()).toContain(`Торговый терминал · ${GAME_BALANCE.nodes.terminal.cost}.00`)
+    expect(wrapper.find('.science-readout').text()).toContain('0.00/ 0.00')
+    expect(wrapper.find('.economy-readout strong').text()).toBe('1000.00')
+    expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1.00', '×5.00', '×10.00'])
     await wrapper.find('.brand-mark').trigger('click')
-    expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1', '×5', '×10', '×100'])
+    expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1.00', '×5.00', '×10.00', '×100.00'])
     expect(wrapper.text()).not.toContain('Вернуть выбранного кота')
     expect(window.localStorage.getItem('catmand-save-v1')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('uses precise shared formatting for totals, credits, and road travel time', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.connectWorkerNodes('rest-1', research.value.id, 0.625)
+    const save = simulation.exportSave()
+    save.simulation.scienceProgress = 12.345
+    save.simulation.nodes.find((node) => node.id === 'rest-1')!.dataBuffer = 0.25
+    save.simulation.economy.credits = 999.255
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(save))
+
+    const wrapper = mount(App, {
+      global: { stubs: { VueFlow: VueFlowStub } },
+    })
+
+    expect(wrapper.find('.science-readout strong').text()).toBe('12.35')
+    expect(wrapper.find('.science-readout em').text()).toBe('/ 0.25')
+    expect(wrapper.find('.economy-readout strong').text()).toBe('999.26')
+    expect(wrapper.find('[data-label="0.63с"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

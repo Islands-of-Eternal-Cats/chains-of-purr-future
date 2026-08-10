@@ -30,7 +30,7 @@ describe('GameNode', () => {
       global: { stubs: { Handle: true } },
     })
     expect(wrapper.text()).toContain('Выработка')
-    expect(wrapper.text()).toContain('1.3')
+    expect(wrapper.text()).toContain('1.25')
     await wrapper.find('.worker-slot').trigger('click')
     expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null, null, null)
   })
@@ -92,7 +92,7 @@ describe('GameNode', () => {
         id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
         data: {
           node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: 'cat-1', reservedByCatId: null, assignedCatId: 'cat-1' }], dataBuffer: 0, dataStored: 0, productionRate: 1, inputRate: 0, dataSold: 0, outputRate: 0 },
-          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: 'slot-1', status: 'idle', travel: null, vigor: 75 } },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'research-1', slotId: 'slot-1', status: 'idle', travel: null, vigor: 74.25 } },
           restWaitingCats: [], selectedCatId: 'cat-1', selectedSlotId: null, onCatClick, onSlotClick,
         },
       },
@@ -100,6 +100,7 @@ describe('GameNode', () => {
     })
 
     expect(wrapper.find('.worker-slot').classes()).toContain('worker-slot--selected')
+    expect(wrapper.find('.cat-vigor').text()).toBe('75')
     expect(wrapper.find('.worker-slot').attributes('title')).toContain('Повторный клик')
     await wrapper.find('.worker-slot').trigger('click')
     expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', 'cat-1', null, 'cat-1')
@@ -263,10 +264,46 @@ describe('GameNode', () => {
 
     expect(wrapper.text()).toContain('Торговый терминал')
     expect(wrapper.text()).toContain('Продажа')
-    expect(wrapper.text()).toContain('0.3')
+    expect(wrapper.text()).toContain('0.25')
     expect(wrapper.text()).not.toContain('Продано')
     expect(wrapper.text()).not.toContain('12.5')
     expect(wrapper.find('.node-metrics').classes()).toContain('node-metrics--single')
     expect(wrapper.findAll('handle-stub')).toHaveLength(3)
+  })
+
+  it('formats server throughput and storage without losing meaningful precision', () => {
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'server-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: {
+            id: 'server-1', type: 'server', name: 'Сервер данных',
+            slots: [{ id: 'server-1-slot-1', catId: null, reservedByCatId: null, assignedCatId: null }],
+            dataBuffer: 0, dataStored: 1.256, dataSold: 0, productionRate: 0, inputRate: 0.25, outputRate: 0.5,
+          },
+          cats: {}, restWaitingCats: [], selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+
+    expect(wrapper.find('.node-metrics').text()).toContain('0.25 / 0.50')
+    expect(wrapper.find('.node-metrics').text()).toContain('1.26')
+  })
+
+  it('formats vigor precisely for cats waiting for a rest seat', () => {
+    const waitingCat = { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'rest-1', slotId: null, status: 'idle' as const, travel: null, vigor: 33.333 }
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'rest-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'rest-1', type: 'rest', name: 'Комната отдыха', slots: [], dataBuffer: 0, dataStored: 0, dataSold: 0, productionRate: 0, inputRate: 0, outputRate: 0 },
+          cats: { 'cat-1': waitingCat }, restWaitingCats: [waitingCat], selectedCatId: null, selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+
+    expect(wrapper.find('.rest-waiting__cat').text()).toContain('34')
   })
 })

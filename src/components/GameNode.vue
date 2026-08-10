@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Handle, Position, type NodeProps } from '@vue-flow/core'
 import { GAME_BALANCE, type Cat, type SimNode, type WorkSlot } from '../core'
+import { formatGameNumber, formatVigor } from '../formatGameNumber'
 
 interface NodeViewData {
   node: SimNode
@@ -86,7 +87,7 @@ const nodeSubtitles = {
       />
       <span class="hub-icon" aria-hidden="true">◆</span>
       <strong>ДОРОЖНЫЙ ХАБ</strong>
-      <p>4 направления</p>
+      <p>{{ formatGameNumber(hubPorts.length) }} направления</p>
       <p v-if="data.blocked" class="node-blocked-message">ПЕРЕКРЫТИЕ · ПЕРЕМЕСТИТЕ</p>
       <section v-if="data.strandedCats?.length" class="stranded-cats" aria-label="Коты без маршрута">
         <span v-for="cat in data.strandedCats" :key="cat.id">{{ cat.variant }} {{ cat.name }} · путь недоступен</span>
@@ -126,7 +127,7 @@ const nodeSubtitles = {
             <span class="cat-glyph" aria-hidden="true">{{ data.cats[slot.catId]?.variant }}</span>
             <span v-if="cannotReachAssignedWork(slot.catId)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
             <span class="cat-name" @click.stop="data.onCatClick(slot.catId)">{{ data.cats[slot.catId]?.name }}</span>
-            <span class="cat-vigor" title="Бодрость">{{ Math.ceil(data.cats[slot.catId]?.vigor ?? 0) }}</span>
+            <span class="cat-vigor" title="Бодрость">{{ formatVigor(data.cats[slot.catId]?.vigor ?? 0) }}</span>
             <span v-if="isUnassignedRestCat(slot)" class="slot-state slot-state--unassigned">без работы</span>
             <span v-if="data.node.type !== 'rest' && (data.cats[slot.catId]?.vigor ?? 0) <= 0" class="slot-state slot-state--warning">отдых недоступен</span>
           </template>
@@ -154,15 +155,15 @@ const nodeSubtitles = {
       <section v-if="data.node.type === 'rest' && data.restWaitingCats.length" class="rest-waiting" aria-label="Очередь отдыха">
         <span>ЖДУТ КРЕСЛА</span>
         <button v-for="cat in data.restWaitingCats" :key="cat.id" class="rest-waiting__cat nodrag nopan" type="button" @click.stop="data.onCatClick(cat.id)">
-          {{ cat.variant }} {{ cat.name }} · {{ Math.ceil(cat.vigor) }}<span v-if="cannotReachAssignedWork(cat.id)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
+          {{ cat.variant }} {{ cat.name }} · {{ formatVigor(cat.vigor) }}<span v-if="cannotReachAssignedWork(cat.id)" class="cat-route-warning" title="Не может добраться до назначенной работы" aria-label="Не может добраться до назначенной работы">!</span>
         </button>
       </section>
 
       <footer class="node-metrics" :class="{ 'node-metrics--single': data.node.type === 'terminal' }">
-        <template v-if="data.node.type === 'research'"><div><span>Выработка</span><strong>{{ data.node.productionRate.toFixed(1) }} <small>ед/с</small></strong></div><div :class="{ warning: data.node.dataBuffer > 0.75 }"><span>Буфер</span><strong>{{ data.node.dataBuffer.toFixed(1) }} <small>данных</small></strong></div></template>
-        <template v-else-if="data.node.type === 'server'"><div><span>Приём / выход</span><strong>{{ data.node.inputRate.toFixed(1) }} / {{ data.node.outputRate.toFixed(1) }} <small>ед/с</small></strong></div><div><span>Хранилище</span><strong>{{ data.node.dataStored.toFixed(1) }} <small>данных</small></strong></div></template>
-        <template v-else-if="data.node.type === 'terminal'"><div><span>Продажа</span><strong>{{ data.node.inputRate.toFixed(1) }} <small>ед/с</small></strong></div></template>
-        <template v-else><div><span>Мест</span><strong>{{ data.node.slots.filter((slot) => !slot.catId).length }} <small>свободно</small></strong></div><div><span>Статус</span><strong>тихо</strong></div></template>
+        <template v-if="data.node.type === 'research'"><div><span>Выработка</span><strong>{{ formatGameNumber(data.node.productionRate) }} <small>ед/с</small></strong></div><div :class="{ warning: data.node.dataBuffer > 0.75 }"><span>Буфер</span><strong>{{ formatGameNumber(data.node.dataBuffer) }} <small>данных</small></strong></div></template>
+        <template v-else-if="data.node.type === 'server'"><div><span>Приём / выход</span><strong>{{ formatGameNumber(data.node.inputRate) }} / {{ formatGameNumber(data.node.outputRate) }} <small>ед/с</small></strong></div><div><span>Хранилище</span><strong>{{ formatGameNumber(data.node.dataStored) }} <small>данных</small></strong></div></template>
+        <template v-else-if="data.node.type === 'terminal'"><div><span>Продажа</span><strong>{{ formatGameNumber(data.node.inputRate) }} <small>ед/с</small></strong></div></template>
+        <template v-else><div><span>Мест</span><strong>{{ formatGameNumber(data.node.slots.filter((slot) => !slot.catId).length) }} <small>свободно</small></strong></div><div><span>Статус</span><strong>тихо</strong></div></template>
       </footer>
 
       <Handle id="road" class="game-handle game-handle--road" type="target" :position="Position.Bottom" />

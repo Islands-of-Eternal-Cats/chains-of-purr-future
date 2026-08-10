@@ -5,6 +5,7 @@ import { GAME_BALANCE, Simulation, type Cat, type CommandResult, type NodeType, 
 import GameNode from './components/GameNode.vue'
 import CatFlightEdge from './components/CatFlightEdge.vue'
 import WorkerTransitEdge from './components/WorkerTransitEdge.vue'
+import { formatGameNumber } from './formatGameNumber'
 
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
@@ -45,11 +46,11 @@ const simulationSpeed = ref<SimulationSpeed>(1)
 const diagnosticSpeedUnlocked = ref(false)
 const normalSpeedOptions: Array<{ value: SimulationSpeed; label: string }> = [
   { value: 0, label: 'Пауза' },
-  { value: 1, label: '×1' },
-  { value: 5, label: '×5' },
-  { value: 10, label: '×10' },
+  { value: 1, label: `×${formatGameNumber(1)}` },
+  { value: 5, label: `×${formatGameNumber(5)}` },
+  { value: 10, label: `×${formatGameNumber(10)}` },
 ]
-const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: '×100' }] : normalSpeedOptions)
+const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: `×${formatGameNumber(100)}` }] : normalSpeedOptions)
 const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])))
 
 const catIndex = computed<Record<string, Cat>>(() => Object.fromEntries(snapshot.value.cats.map((cat) => [cat.id, cat])))
@@ -151,7 +152,7 @@ const flowEdges = computed<Edge[]>(() => {
   const workerEdges: Edge[] = snapshot.value.workerLinks.map((link) => ({
     id: link.id, source: link.nodeAId, target: link.nodeBId, sourceHandle: roadHandle(link.nodeAPort), targetHandle: roadHandle(link.nodeBPort),
     type: 'workerTransit', animated: false, markerStart: MarkerType.ArrowClosed, markerEnd: MarkerType.ArrowClosed, class: 'worker-edge',
-    selected: selectedConnection.value?.id === link.id, label: `${link.travelSeconds.toFixed(1)}с`,
+    selected: selectedConnection.value?.id === link.id, label: `${formatGameNumber(link.travelSeconds)}с`,
     data: { kind: 'worker', cats: snapshot.value.cats.filter((cat) => cat.travel?.kind === 'road' && cat.travel.leg.linkId === link.id) },
   }))
   const flightEdges: Edge[] = snapshot.value.cats.flatMap((cat) => {
@@ -502,13 +503,13 @@ function isValidConnection(connection: FlowConnection) {
 
 function setSimulationSpeed(speed: SimulationSpeed) {
   simulationSpeed.value = speed
-  status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${speed}.`
+  status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${formatGameNumber(speed)}.`
 }
 
 function unlockDiagnosticSpeed() {
   if (diagnosticSpeedUnlocked.value) return
   diagnosticSpeedUnlocked.value = true
-  status.value = 'Диагностический режим открыт: доступна скорость ×100.'
+  status.value = `Диагностический режим открыт: доступна скорость ×${formatGameNumber(100)}.`
 }
 
 function downloadText(contents: string, filename: string) {
@@ -651,10 +652,10 @@ onBeforeUnmount(() => {
             >{{ option.label }}</button>
           </div>
         </div>
-        <div class="science-readout"><span>НАУКА / ДАННЫЕ</span><strong>{{ totalScience.toFixed(1) }}</strong><em>/ {{ totalData.toFixed(1) }}</em></div>
+        <div class="science-readout"><span>НАУКА / ДАННЫЕ</span><strong>{{ formatGameNumber(totalScience) }}</strong><em>/ {{ formatGameNumber(totalData) }}</em></div>
         <div class="economy-readout" :class="{ 'economy-readout--debt': snapshot.economy.credits < 0 }">
-          <span>КРЕДИТЫ</span><strong>{{ snapshot.economy.credits.toFixed(1) }}</strong>
-          <em>{{ (snapshot.economy.revenuePerMinute - snapshot.economy.upkeepPerMinute).toFixed(1) }}/мин</em>
+          <span>КРЕДИТЫ</span><strong>{{ formatGameNumber(snapshot.economy.credits) }}</strong>
+          <em>{{ formatGameNumber(snapshot.economy.revenuePerMinute - snapshot.economy.upkeepPerMinute) }}/мин</em>
         </div>
       </div>
     </header>
@@ -662,19 +663,19 @@ onBeforeUnmount(() => {
     <section class="workspace">
       <aside class="control-panel">
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
-        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.rest.cost" @click="createNode('rest')"><span>⌂</span> Комната отдыха · {{ GAME_BALANCE.nodes.rest.cost }}</button>
-        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.research.cost" @click="createNode('research')"><span>✦</span> Исследования · {{ GAME_BALANCE.nodes.research.cost }}</button>
-        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.server.cost" @click="createNode('server')"><span>▦</span> Сервер · {{ GAME_BALANCE.nodes.server.cost }}</button>
-        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.terminal.cost" @click="createNode('terminal')"><span>₡</span> Торговый терминал · {{ GAME_BALANCE.nodes.terminal.cost }}</button>
-        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.hub.cost" @click="createNode('hub')"><span>◆</span> Дорожный хаб · {{ GAME_BALANCE.nodes.hub.cost }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.rest.cost" @click="createNode('rest')"><span>⌂</span> Комната отдыха · {{ formatGameNumber(GAME_BALANCE.nodes.rest.cost) }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.research.cost" @click="createNode('research')"><span>✦</span> Исследования · {{ formatGameNumber(GAME_BALANCE.nodes.research.cost) }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.server.cost" @click="createNode('server')"><span>▦</span> Сервер · {{ formatGameNumber(GAME_BALANCE.nodes.server.cost) }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.terminal.cost" @click="createNode('terminal')"><span>₡</span> Торговый терминал · {{ formatGameNumber(GAME_BALANCE.nodes.terminal.cost) }}</button>
+        <button class="action-button" type="button" :disabled="snapshot.economy.credits < GAME_BALANCE.nodes.hub.cost" @click="createNode('hub')"><span>◆</span> Дорожный хаб · {{ formatGameNumber(GAME_BALANCE.nodes.hub.cost) }}</button>
         <p v-if="snapshot.flightUnlocked" class="flight-era-note">✦ ВОЗДУШНАЯ ЭРА · коты летают напрямую</p>
         <p v-if="snapshot.economy.debtWarning" class="debt-warning">ЛАБОРАТОРИЯ ЗАКРЫТА · ранний доступ позволяет продолжить восстановление.</p>
         <button class="action-button action-button--disconnect" type="button" :disabled="!selectedConnection" @click="disconnectSelected"><span>×</span> Отключить связь</button>
         <button class="action-button action-button--danger" type="button" :disabled="!selectedModuleId" @click="deleteSelectedNode"><span>×</span> Удалить выбранный модуль</button>
         <div class="panel-rule"></div>
         <p class="panel-label">ЭКИПАЖ</p>
-        <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ GAME_BALANCE.economy.hireCatCost }}</button>
-        <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ GAME_BALANCE.economy.dismissCatCost }}</button>
+        <button class="hire-button" type="button" :disabled="!canHireCat" @click="hireCat"><span>◕</span> Нанять кота · {{ formatGameNumber(GAME_BALANCE.economy.hireCatCost) }}</button>
+        <button class="action-button action-button--danger" type="button" :disabled="!canDismissSelectedCat" @click="dismissSelectedCat"><span>−</span> Уволить кота · {{ formatGameNumber(GAME_BALANCE.economy.dismissCatCost) }}</button>
         <div class="panel-rule"></div>
         <p class="panel-label">СОХРАНЕНИЕ</p>
         <button class="action-button" type="button" @click="exportGame"><span>⇩</span> Выгрузить JSON</button>
@@ -711,7 +712,7 @@ onBeforeUnmount(() => {
           </template>
         </VueFlow>
         <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot }"><span class="status-dot"></span>{{ status }}</div>
-        <div class="canvas-caption"><span>LIVE SIMULATION</span><b>{{ simulationSpeed }}×</b></div>
+        <div class="canvas-caption"><span>LIVE SIMULATION</span><b>{{ formatGameNumber(simulationSpeed) }}×</b></div>
       </section>
     </section>
   </main>
