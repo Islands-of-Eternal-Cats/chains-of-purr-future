@@ -7,7 +7,7 @@
 ## 2. Interface and verification
 
 - [x] 2.1 Update the ordinary-module deletion success message to describe evacuation and rerouting.
-- [ ] 2.2 Add simulation tests for occupied and target deletion, deterministic rest allocation and overflow, intermediate-road rerouting, and reference cleanup.
+- [x] 2.2 Add simulation tests for occupied and target deletion, deterministic rest allocation and overflow, intermediate-road rerouting, and reference cleanup.
 - [x] 2.3 Run the complete test suite, production build, and strict OpenSpec validation.
 
 ## 3. Unassigned-cat indicator

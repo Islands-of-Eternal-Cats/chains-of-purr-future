@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Simulation } from './simulation'
+import type { WorkerLink } from './types'
 
 function node(simulation: Simulation, type: 'rest' | 'research' | 'server' | 'hub') {
   const result = simulation.snapshot().nodes.find((candidate) => candidate.type === type)
@@ -19,6 +20,11 @@ function createResearch(simulation: Simulation) {
   const link = simulation.connectWorkerNodes('rest-1', research.value.id, 1)
   if (!link.ok) throw new Error(link.reason)
   return research.value
+}
+
+function addLegacyWorkerLink(simulation: Simulation, link: WorkerLink) {
+  const state = simulation as unknown as { workerLinks: Map<string, WorkerLink> }
+  state.workerLinks.set(link.id, link)
 }
 
 describe('Simulation rest seating', () => {
@@ -92,8 +98,94 @@ describe('Simulation rest seating', () => {
 
     expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: true })
     expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', slotId: 'rest-1-slot-1', status: 'idle', travel: null, stranded: null })
-    expect(simulation.snapshot().nodes).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: research.value.id })]))
+    expect(JSON.stringify(simulation.snapshot())).not.toContain(research.value.id)
     expect(simulation.deleteNode('rest-1')).toMatchObject({ ok: false, reason: expect.stringContaining('Базовую') })
+  })
+
+  it('evacuates a cat whose target is removed to the deterministic nearest rest seat and clears references', () => {
+    const simulation = new Simulation()
+    const firstRest = simulation.createNode('rest')
+    const secondRest = simulation.createNode('rest')
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!firstRest.ok || !secondRest.ok || !research.ok || !server.ok) throw new Error('Missing evacuation setup')
+
+    simulation.setNodePosition('rest-1', { x: 0, y: 0 })
+    simulation.setNodePosition(firstRest.value.id, { x: 50, y: 10 })
+    simulation.setNodePosition(secondRest.value.id, { x: 50, y: -10 })
+    simulation.setNodePosition(research.value.id, { x: 100, y: 0 })
+    simulation.connect(research.value.id, server.value.id)
+    expect(simulation.connectWorkerNodes('rest-1', research.value.id, 10).ok).toBe(true)
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
+    simulation.tick(5)
+
+    expect(simulation.deleteNode(research.value.id)).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({
+      nodeId: firstRest.value.id,
+      slotId: firstRest.value.slots[0].id,
+      status: 'idle',
+      travel: null,
+      stranded: null,
+    })
+    expect(JSON.stringify(simulation.snapshot())).not.toContain(research.value.id)
+  })
+
+  it('queues every evacuated cat at the base rest room when all rest seats are occupied', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    simulation.hireCat()
+    simulation.tick(5)
+    expect(simulation.assignCat('cat-1', research.id, research.slots[0].id).ok).toBe(true)
+    expect(simulation.assignCat('cat-2', research.id, research.slots[1].id).ok).toBe(true)
+    simulation.tick(1)
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.hireCat()
+    expect(node(simulation, 'rest').slots.every((slot) => slot.catId)).toBe(true)
+
+    expect(simulation.deleteNode(research.id)).toMatchObject({ ok: true })
+    expect(cat(simulation, 'cat-1')).toMatchObject({ nodeId: 'rest-1', slotId: null, status: 'idle', travel: null, stranded: null })
+    expect(cat(simulation, 'cat-2')).toMatchObject({ nodeId: 'rest-1', slotId: null, status: 'idle', travel: null, stranded: null })
+    expect(JSON.stringify(simulation.snapshot())).not.toContain(research.id)
+  })
+
+  it('reroutes a road traveller after deleting its next legacy ordinary-module endpoint', () => {
+    const simulation = new Simulation()
+    const intermediate = simulation.createNode('server')
+    const first = simulation.createNode('hub')
+    const detour = simulation.createNode('hub')
+    const last = simulation.createNode('hub')
+    const research = simulation.createNode('research')
+    if (!intermediate.ok || !first.ok || !detour.ok || !last.ok || !research.ok) throw new Error('Missing reroute setup')
+
+    simulation.connect(research.value.id, intermediate.value.id)
+    expect(simulation.connectWorkerNodes('rest-1', first.value.id, 1, 'road', 'west').ok).toBe(true)
+    expect(simulation.connectWorkerNodes(first.value.id, intermediate.value.id, 1, 'north', 'road').ok).toBe(true)
+    expect(simulation.connectWorkerNodes(first.value.id, detour.value.id, 4, 'east', 'west').ok).toBe(true)
+    expect(simulation.connectWorkerNodes(detour.value.id, last.value.id, 4, 'east', 'west').ok).toBe(true)
+    expect(simulation.connectWorkerNodes(last.value.id, research.value.id, 1, 'east', 'road').ok).toBe(true)
+    addLegacyWorkerLink(simulation, {
+      id: `legacy-${intermediate.value.id}-${last.value.id}`,
+      nodeAId: intermediate.value.id,
+      nodeBId: last.value.id,
+      nodeAPort: 'road',
+      nodeBPort: 'north',
+      travelSeconds: 1,
+    })
+
+    expect(simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id).ok).toBe(true)
+    simulation.tick(1.5)
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { toNodeId: intermediate.value.id } })
+
+    expect(simulation.deleteNode(intermediate.value.id)).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ nodeId: first.value.id, status: 'travelling', stranded: null })
+    expect(cat(simulation).travel).toMatchObject({
+      kind: 'road',
+      targetNodeId: research.value.id,
+      leg: { toNodeId: detour.value.id },
+    })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
+    expect(JSON.stringify(simulation.snapshot())).not.toContain(intermediate.value.id)
   })
 
   it('starts with common seats, while new hires begin tired', () => {
