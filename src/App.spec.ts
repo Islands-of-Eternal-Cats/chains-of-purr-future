@@ -107,6 +107,58 @@ describe('App economy controls', () => {
     wrapper.unmount()
   })
 
+  it('controls simulation speed with Space and number shortcuts', async () => {
+    const wrapper = mount(App, {
+      global: { stubs: { VueFlow: VueFlowStub } },
+    })
+
+    const activeSpeed = () => wrapper.find('.speed-button--active').text()
+    const press = async (key: string) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      window.dispatchEvent(event)
+      await wrapper.vm.$nextTick()
+      return event
+    }
+
+    expect(activeSpeed()).toBe('×1.00')
+    await press('2')
+    expect(activeSpeed()).toBe('×5.00')
+    expect(wrapper.find('.graph-status').text()).toContain('×5.00')
+    const firstSpaceEvent = await press(' ')
+    expect(firstSpaceEvent.defaultPrevented).toBe(true)
+    expect(activeSpeed()).toBe('Пауза')
+    await press(' ')
+    expect(activeSpeed()).toBe('×5.00')
+    await press('3')
+    expect(activeSpeed()).toBe('×10.00')
+    await press('1')
+    expect(activeSpeed()).toBe('×1.00')
+    const spaceEvent = await press(' ')
+    expect(spaceEvent.defaultPrevented).toBe(true)
+    expect(activeSpeed()).toBe('Пауза')
+    await press(' ')
+    expect(activeSpeed()).toBe('×1.00')
+
+    expect(wrapper.find('.speed-button').attributes('aria-keyshortcuts')).toBe('Space')
+    expect(wrapper.findAll('.speed-button')[2].attributes('aria-keyshortcuts')).toBe('2')
+    wrapper.unmount()
+  })
+
+  it('does not use speed shortcuts with modifiers or from editable controls', async () => {
+    const wrapper = mount(App, {
+      global: { stubs: { VueFlow: VueFlowStub } },
+    })
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '3', ctrlKey: true, bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.speed-button--active').text()).toBe('×1.00')
+
+    wrapper.find('input[type="file"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.speed-button--active').text()).toBe('×1.00')
+    wrapper.unmount()
+  })
+
   it('keeps the default data nodes apart and renders both validated data edges', async () => {
     const wrapper = mount(App, {
       global: { stubs: { VueFlow: VueFlowStub } },

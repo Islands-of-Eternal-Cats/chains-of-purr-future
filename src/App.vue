@@ -10,6 +10,7 @@ import { formatGameNumber } from './formatGameNumber'
 type Point = { x: number; y: number }
 type Size = { width: number; height: number }
 type SimulationSpeed = 0 | 1 | 5 | 10 | 100
+type SpeedOption = { value: SimulationSpeed; label: string; shortcut?: string }
 
 const SAVE_KEY = 'catmand-save-v1'
 const SAVE_WARNING_KEY = 'catmand-save-warning-acknowledged'
@@ -43,12 +44,13 @@ const status = ref(initialSaveError || 'Создайте лабораторию 
 const saveError = ref(initialSaveError)
 const showEarlyWarning = ref(typeof window !== 'undefined' && window.localStorage.getItem(SAVE_WARNING_KEY) !== '1')
 const simulationSpeed = ref<SimulationSpeed>(1)
+const lastRunningSpeed = ref<Exclude<SimulationSpeed, 0>>(1)
 const diagnosticSpeedUnlocked = ref(false)
-const normalSpeedOptions: Array<{ value: SimulationSpeed; label: string }> = [
-  { value: 0, label: 'Пауза' },
-  { value: 1, label: `×${formatGameNumber(1)}` },
-  { value: 5, label: `×${formatGameNumber(5)}` },
-  { value: 10, label: `×${formatGameNumber(10)}` },
+const normalSpeedOptions: SpeedOption[] = [
+  { value: 0, label: 'Пауза', shortcut: 'Space' },
+  { value: 1, label: `×${formatGameNumber(1)}`, shortcut: '1' },
+  { value: 5, label: `×${formatGameNumber(5)}`, shortcut: '2' },
+  { value: 10, label: `×${formatGameNumber(10)}`, shortcut: '3' },
 ]
 const speedOptions = computed(() => diagnosticSpeedUnlocked.value ? [...normalSpeedOptions, { value: 100 as const, label: `×${formatGameNumber(100)}` }] : normalSpeedOptions)
 const positions = ref<Record<string, Point>>(Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }])))
@@ -503,7 +505,25 @@ function isValidConnection(connection: FlowConnection) {
 
 function setSimulationSpeed(speed: SimulationSpeed) {
   simulationSpeed.value = speed
+  if (speed !== 0) lastRunningSpeed.value = speed
   status.value = speed === 0 ? 'Симуляция поставлена на паузу.' : `Скорость симуляции: ×${formatGameNumber(speed)}.`
+}
+
+function handleKeyboardShortcuts(event: KeyboardEvent) {
+  cancelCatSelection(event)
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+  const target = event.target
+  if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName))) return
+  if (event.key === ' ' || event.key === 'Spacebar') {
+    event.preventDefault()
+    setSimulationSpeed(simulationSpeed.value === 0 ? lastRunningSpeed.value : 0)
+    return
+  }
+  const speedByKey: Record<string, SimulationSpeed> = { '1': 1, '2': 5, '3': 10 }
+  const speed = speedByKey[event.key]
+  if (speed === undefined) return
+  event.preventDefault()
+  setSimulationSpeed(speed)
 }
 
 function unlockDiagnosticSpeed() {
@@ -537,6 +557,7 @@ function resetTransientState() {
   selectedConnection.value = null
   selectedModuleId.value = null
   simulationSpeed.value = 1
+  lastRunningSpeed.value = 1
   positions.value = Object.fromEntries(simulation.snapshot().nodes.map((node) => [node.id, node.position ?? { x: 0, y: 0 }]))
 }
 
@@ -602,7 +623,8 @@ function animate(time: number) {
     const arrivedCat = snapshot.value.cats.find((cat) => travellingCats.has(cat.id) && cat.status === 'idle')
     if (!wasFlightUnlocked && snapshot.value.flightUnlocked) {
       simulationSpeed.value = 1
-      status.value = 'Научный прорыв: коты получили возможность летать напрямую между модулями. Скорость снижена до ×1.'
+      lastRunningSpeed.value = 1
+      status.value = `Научный прорыв: коты получили возможность летать напрямую между модулями. Скорость снижена до ×${formatGameNumber(1)}.`
     }
     else if (arrivedCat) status.value = `${arrivedCat.name} прибыл: ${snapshot.value.nodes.find((node) => node.id === arrivedCat.nodeId)?.name ?? 'модуль'}.`
   }
@@ -610,11 +632,11 @@ function animate(time: number) {
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', cancelCatSelection)
+  window.addEventListener('keydown', handleKeyboardShortcuts)
   frame = requestAnimationFrame(animate)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', cancelCatSelection)
+  window.removeEventListener('keydown', handleKeyboardShortcuts)
   cancelAnimationFrame(frame)
   if (autosaveTimer) clearTimeout(autosaveTimer)
   saveLocalNow()
@@ -648,6 +670,8 @@ onBeforeUnmount(() => {
               :class="{ 'speed-button--active': simulationSpeed === option.value }"
               type="button"
               :aria-pressed="simulationSpeed === option.value"
+              :aria-keyshortcuts="option.shortcut"
+              :title="option.value === 0 ? 'Пауза / продолжить · клавиша Пробел' : option.shortcut ? `${option.label} · клавиша ${option.shortcut}` : option.label"
               @click="setSimulationSpeed(option.value)"
             >{{ option.label }}</button>
           </div>
