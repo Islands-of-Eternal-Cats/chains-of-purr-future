@@ -103,12 +103,80 @@ describe('App economy controls', () => {
     expect(wrapper.find('.app-version').text()).toBe('v0.2.0')
     expect(wrapper.find('.science-readout').text()).toContain('0.00/ 0.00')
     expect(wrapper.find('.economy-readout strong').text()).toBe('1000.00')
+    expect(wrapper.find('.expense-label').text()).toBe('РАСХОДЫ / МИН')
+    expect(wrapper.find('.expense-line small').text()).toBe('−11.00')
+    expect(wrapper.find('.objective-card').text()).toContain('АВТОНОМНАЯ ЛАБОРАТОРИЯ')
+    expect(wrapper.find('.objective-card').text()).toContain('0.00 / 25.00 данных')
     expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1.00', '×5.00', '×10.00'])
     await wrapper.find('.brand-mark').trigger('click')
     expect(wrapper.findAll('.speed-button').map((button) => button.text())).toEqual(['Пауза', '×1.00', '×5.00', '×10.00', '×100.00'])
     expect(wrapper.text()).not.toContain('Вернуть выбранного кота')
-    expect(window.localStorage.getItem('catmand-save-v1')).toBeNull()
+    expect(window.localStorage.getItem('catmand-save-v2')).toBeNull()
     wrapper.unmount()
+  })
+
+  it('visualizes recurring upkeep by category and updates it after expansion', async () => {
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+
+    expect(wrapper.findAll('.expense-segment').map((segment) => segment.attributes('title'))).toEqual([
+      'Комнаты отдыха: 6.00/мин',
+      'Коты: 5.00/мин',
+    ])
+
+    await wrapper.findAll('.action-button').find((button) => button.text().includes('Исследования ·'))!.trigger('click')
+    await wrapper.find('.hire-button').trigger('click')
+
+    expect(wrapper.find('.expense-line small').text()).toBe('−28.00')
+    expect(wrapper.find('.expense-segment--research').attributes('title')).toBe('Исследования: 12.00/мин')
+    expect(wrapper.find('.expense-segment--cats').attributes('title')).toBe('Коты: 10.00/мин')
+    expect(wrapper.find('.expense-bar').attributes('aria-label')).toContain('Расходы 28.00 в минуту')
+    wrapper.unmount()
+  })
+
+  it('ignores the old local save key', () => {
+    const legacy = new Simulation().exportSave() as unknown as { version: number; simulation: { scienceProgress: number } }
+    legacy.version = 1
+    legacy.simulation.scienceProgress = 49
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(legacy))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    expect(wrapper.find('.science-readout strong').text()).toBe('0.00')
+    expect(window.localStorage.getItem('catmand-save-v2')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('pauses for an unacknowledged objective and resumes the persisted sandbox at ×1', async () => {
+    const simulation = new Simulation()
+    const save = simulation.exportSave()
+    save.simulation.flightUnlocked = true
+    save.simulation.scienceProgress = GAME_BALANCE.science.flightUnlockProgress
+    save.simulation.economy.totalDataSold = GAME_BALANCE.objective.dataSoldTarget
+    save.simulation.goal = { achieved: true, acknowledged: false }
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(save))
+
+    const wrapper = mount(App, { attachTo: document.body, global: { stubs: { VueFlow: VueFlowStub } } })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('.goal-modal').text()).toContain('ЦЕЛЬ ДОСТИГНУТА')
+    expect(wrapper.find('.speed-button--active').text()).toBe('Пауза')
+    expect(document.activeElement).toBe(wrapper.find('.goal-modal button').element)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.speed-button--active').text()).toBe('Пауза')
+
+    await wrapper.find('.goal-modal button').trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.find('.speed-button--active').text()).toBe('×1.00')
+    expect(wrapper.find('.objective-card__sandbox').text()).toContain('ПЕСОЧНИЦА ПРОДОЛЖАЕТСЯ')
+    const persisted = JSON.parse(window.localStorage.getItem('catmand-save-v2')!)
+    expect(persisted.simulation.goal).toEqual({ achieved: true, acknowledged: true })
+    wrapper.unmount()
+
+    const restoredWrapper = mount(App, { attachTo: document.body, global: { stubs: { VueFlow: VueFlowStub } } })
+    expect(restoredWrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(restoredWrapper.find('.speed-button--active').text()).toBe('×1.00')
+    restoredWrapper.unmount()
   })
 
   it('uses precise shared formatting for totals, credits, and road travel time', () => {
@@ -120,7 +188,7 @@ describe('App economy controls', () => {
     save.simulation.scienceProgress = 12.345
     save.simulation.nodes.find((node) => node.id === 'rest-1')!.dataBuffer = 0.25
     save.simulation.economy.credits = 999.255
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(save))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(save))
 
     const wrapper = mount(App, {
       global: { stubs: { VueFlow: VueFlowStub } },
@@ -142,7 +210,7 @@ describe('App economy controls', () => {
     simulation.hireCat()
     simulation.tick(5)
     simulation.assignCat('cat-3', research.value.id, research.value.slots[0].id)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const roster = wrapper.find('.crew-roster-section')
@@ -178,7 +246,7 @@ describe('App economy controls', () => {
     travellingSimulation.assignCat('cat-1', travellingResearch.value.id, travellingResearch.value.slots[0].id)
     travellingSimulation.tick(1)
     travellingSimulation.releaseCat('cat-1')
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(travellingSimulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(travellingSimulation.exportSave()))
 
     const travellingWrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     expect(travellingWrapper.find('.crew-cat-button').text()).toContain('в пути')
@@ -193,7 +261,7 @@ describe('App economy controls', () => {
     strandedSimulation.tick(1)
     strandedSimulation.disconnectWorkerLink(road.value.id)
     strandedSimulation.releaseCat('cat-1')
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(strandedSimulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(strandedSimulation.exportSave()))
 
     const strandedWrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     expect(strandedWrapper.find('.crew-cat-button').text()).toContain('путь недоступен')
@@ -205,7 +273,7 @@ describe('App economy controls', () => {
     const research = simulation.createNode('research')
     if (!research.ok) throw new Error(research.reason)
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     expect(wrapper.find('.crew-roster-heading strong').text()).toBe('0')
@@ -307,7 +375,7 @@ describe('App economy controls', () => {
     expect(hubNode.attributes('data-blocked')).toBe('true')
     wrapper.unmount()
 
-    const saved = JSON.parse(window.localStorage.getItem('catmand-save-v1')!)
+    const saved = JSON.parse(window.localStorage.getItem('catmand-save-v2')!)
     expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'research-1').position).toEqual({ x: 385, y: 130 })
     expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'hub-2').position).toEqual({ x: 490, y: 202 })
   })
@@ -323,7 +391,7 @@ describe('App economy controls', () => {
     simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
     simulation.tick(2)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const sourceSelector = `.slot-${research.value.slots[0].id}`
@@ -355,7 +423,7 @@ describe('App economy controls', () => {
     simulation.connectWorkerNodes('rest-1', research.value.id, 1)
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
     simulation.tick(1)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const sourceSelector = `.slot-${research.value.slots[0].id}`
@@ -376,7 +444,7 @@ describe('App economy controls', () => {
     simulation.connectWorkerNodes('rest-1', research.value.id, 1)
     simulation.hireCat()
     simulation.assignCat('cat-2', research.value.id, research.value.slots[0].id)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const sourceSelector = `.slot-${research.value.slots[0].id}`
@@ -399,7 +467,7 @@ describe('App economy controls', () => {
     if (!research.ok) throw new Error(research.reason)
     simulation.connectWorkerNodes('rest-1', research.value.id, 4)
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const targetSelector = `.slot-${research.value.slots[0].id}`
@@ -425,7 +493,7 @@ describe('App economy controls', () => {
     simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
     simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const oldTarget = `.slot-${research.value.slots[0].id}`
@@ -453,7 +521,7 @@ describe('App economy controls', () => {
     simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
     simulation.tick(2)
     simulation.releaseCat('cat-1')
-    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+    window.localStorage.setItem('catmand-save-v2', JSON.stringify(simulation.exportSave()))
 
     const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
     const restTarget = '.slot-rest-1-slot-1'
