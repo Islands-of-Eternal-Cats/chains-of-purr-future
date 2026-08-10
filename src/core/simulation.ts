@@ -346,12 +346,30 @@ export class Simulation {
     const currentSlot = cat?.slotId ? currentNode?.slots.find((slot) => slot.id === cat.slotId) : undefined
     const isWorking = Boolean(currentSlot?.catId === catId && currentNode && currentNode.type !== 'rest' && currentNode.type !== 'hub')
     if (!cat) return { ok: false, reason: 'Кот не найден.' }
-    if (node?.blocked || currentNode?.blocked) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
-    if (cat.status === 'travelling' || cat.status === 'stranded') return { ok: false, reason: 'Кот уже следует к назначенной цели.' }
+    if (node?.blocked || (cat.status === 'idle' && currentNode?.blocked)) return { ok: false, reason: 'Перекрытый модуль недоступен.' }
     if (!node || node.type === 'rest' || node.type === 'hub') return { ok: false, reason: 'Рабочий слот не найден.' }
     if (!targetSlot) return { ok: false, reason: 'Рабочий слот не найден.' }
     if (targetSlot.catId || targetSlot.reservedByCatId) return { ok: false, reason: 'Этот слот уже занят или зарезервирован.' }
-    if (!isWorking && cat.nodeId === nodeId) return { ok: false, reason: 'Кот уже находится в этом модуле.' }
+    if (cat.status === 'idle' && !isWorking && cat.nodeId === nodeId) return { ok: false, reason: 'Кот уже находится в этом модуле.' }
+
+    const activeTarget = this.activeTarget(cat)
+    if (activeTarget) {
+      this.clearWorkAssignmentForCat(cat.id)
+      targetSlot.assignedCatId = cat.id
+      if (activeTarget.node.type === 'rest') return { ok: true, value: undefined }
+
+      const rollbackNodeId = cat.travel
+        ? cat.travel.kind === 'road' ? cat.travel.leg.fromNodeId : cat.travel.fromNodeId
+        : cat.nodeId
+      this.releaseCatReservations(cat.id)
+      cat.nodeId = rollbackNodeId
+      cat.slotId = null
+      cat.status = 'idle'
+      cat.travel = null
+      cat.stranded = null
+      this.moveCatToTargetOrStrand(cat, node.id, targetSlot.id)
+      return { ok: true, value: undefined }
+    }
 
     this.clearWorkAssignmentForCat(cat.id)
     targetSlot.assignedCatId = cat.id
@@ -368,6 +386,28 @@ export class Simulation {
     this.returnRecoveredCatsToAssignedSlots()
     this.seatWaitingCats()
     this.resumeStrandedCats()
+    return { ok: true, value: undefined }
+  }
+
+  cancelCatWorkDestination(catId: string): CommandResult<void> {
+    const cat = this.cats.get(catId)
+    if (!cat) return { ok: false, reason: 'Кот не найден.' }
+    const activeTarget = this.activeTarget(cat)
+    if (!activeTarget || activeTarget.node.type === 'rest' || activeTarget.node.type === 'hub') {
+      return { ok: false, reason: 'У кота нет активной рабочей цели.' }
+    }
+
+    const rollbackNodeId = cat.travel
+      ? cat.travel.kind === 'road' ? cat.travel.leg.fromNodeId : cat.travel.fromNodeId
+      : cat.nodeId
+    this.clearWorkAssignmentForCat(cat.id)
+    this.releaseCatReservations(cat.id)
+    cat.nodeId = rollbackNodeId
+    cat.slotId = null
+    cat.status = 'idle'
+    cat.travel = null
+    cat.stranded = null
+    this.sendCatToRest(cat)
     return { ok: true, value: undefined }
   }
 
@@ -394,17 +434,7 @@ export class Simulation {
     if (!currentSlot || currentSlot.catId !== cat.id) return { ok: false, reason: 'Кот не занимает рабочий слот.' }
 
     this.clearWorkAssignmentForCat(cat.id)
-    const restSlot = this.findRestSeat()
-    if (restSlot) {
-      this.moveCatToTargetOrStrand(cat, restSlot.node.id, restSlot.slot.id)
-      return { ok: true, value: undefined }
-    }
-
-    currentSlot.catId = null
-    cat.slotId = null
-    cat.status = 'stranded'
-    cat.travel = null
-    cat.stranded = { targetNodeId: REST_ID, targetSlotId: null, sourceNodeId: cat.nodeId }
+    this.sendCatToRest(cat)
     return { ok: true, value: undefined }
   }
 
@@ -560,6 +590,15 @@ export class Simulation {
     const sourceNodeId = cat.nodeId
     const sourceSlotId = currentSlot?.id ?? null
     if (currentSlot) currentSlot.catId = null
+    if (sourceNodeId === targetNodeId) {
+      targetSlot.reservedByCatId = null
+      targetSlot.catId = cat.id
+      cat.slotId = targetSlot.id
+      cat.status = 'idle'
+      cat.travel = null
+      cat.stranded = null
+      return
+    }
     targetSlot.reservedByCatId = cat.id
     cat.slotId = null
     cat.stranded = null
@@ -580,6 +619,30 @@ export class Simulation {
     cat.status = 'stranded'
     cat.travel = null
     cat.stranded = { targetNodeId, targetSlotId, sourceNodeId }
+  }
+
+  private activeTarget(cat: Cat): { node: SimNode; slot: WorkSlot | null } | null {
+    const target = cat.travel ?? cat.stranded
+    if (!target) return null
+    const node = this.nodes.get(target.targetNodeId)
+    if (!node) return null
+    const slot = target.targetSlotId ? node.slots.find((candidate) => candidate.id === target.targetSlotId) ?? null : null
+    return { node, slot }
+  }
+
+  private sendCatToRest(cat: Cat) {
+    const restSlot = this.findRestSeat()
+    if (restSlot) {
+      this.moveCatToTargetOrStrand(cat, restSlot.node.id, restSlot.slot.id)
+      return
+    }
+
+    const currentSlot = cat.slotId ? this.nodes.get(cat.nodeId)?.slots.find((slot) => slot.id === cat.slotId) : undefined
+    if (currentSlot) currentSlot.catId = null
+    cat.slotId = null
+    cat.status = 'stranded'
+    cat.travel = null
+    cat.stranded = { targetNodeId: REST_ID, targetSlotId: null, sourceNodeId: cat.nodeId }
   }
 
   private startTravel(cat: Cat, targetNodeId: string, targetSlotId: string): CommandResult<void> {
@@ -710,6 +773,12 @@ export class Simulation {
     for (const node of this.nodes.values()) {
       if (node.type === 'rest' || node.type === 'hub') continue
       for (const slot of node.slots) if (slot.assignedCatId === catId) slot.assignedCatId = null
+    }
+  }
+
+  private releaseCatReservations(catId: string) {
+    for (const node of this.nodes.values()) {
+      for (const slot of node.slots) if (slot.reservedByCatId === catId) slot.reservedByCatId = null
     }
   }
 

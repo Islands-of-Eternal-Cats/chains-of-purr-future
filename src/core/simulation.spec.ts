@@ -337,6 +337,114 @@ describe('Simulation rest seating', () => {
     expect(cat(simulation)).toMatchObject({ nodeId: research.id, slotId: research.slots[1].id, status: 'idle' })
   })
 
+  it('redirects a travelling cat from the start of its current road leg', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing redirect network')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 2, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(1.5)
+
+    expect(cat(simulation).travel).toMatchObject({ kind: 'road', leg: { fromNodeId: hub.value.id, toNodeId: research.value.id }, legProgress: 0.25 })
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(research.value.id).not.toBe(server.value.id)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === research.value.id)?.slots[0]).toMatchObject({ assignedCatId: null, reservedByCatId: null })
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === server.value.id)?.slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
+    expect(cat(simulation)).toMatchObject({ nodeId: hub.value.id, status: 'travelling', travel: { targetNodeId: server.value.id, leg: { fromNodeId: hub.value.id } } })
+  })
+
+  it('keeps an active destination intact when a redirect target is unavailable', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing atomic redirect network')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.assignCat('cat-2', server.value.id, server.value.slots[0].id)
+    const before = cat(simulation, 'cat-1')
+
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: false, reason: expect.stringContaining('занят') })
+    expect(cat(simulation, 'cat-1')).toEqual(before)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === research.value.id)?.slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: 'cat-1' })
+  })
+
+  it('changes future work without interrupting a return-to-rest journey', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing future-work network')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(2)
+    simulation.releaseCat('cat-1')
+    const restTarget = cat(simulation).travel
+
+    expect(restTarget).toMatchObject({ targetNodeId: 'rest-1', targetSlotId: 'rest-1-slot-1' })
+    expect(simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)).toMatchObject({ ok: true })
+    expect(cat(simulation).travel).toEqual(restTarget)
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === server.value.id)?.slots[0]).toMatchObject({ assignedCatId: 'cat-1', reservedByCatId: null })
+    expect(node(simulation, 'rest').slots[0].reservedByCatId).toBe('cat-1')
+  })
+
+  it('cancels a work destination at the current road-leg start and sends the cat to rest', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !hub.ok) throw new Error('Missing cancellation network')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 2, 'north', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(1.5)
+
+    expect(simulation.cancelCatWorkDestination('cat-1')).toMatchObject({ ok: true })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: null, reservedByCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: hub.value.id, status: 'travelling', travel: { targetNodeId: 'rest-1', leg: { fromNodeId: hub.value.id, toNodeId: 'rest-1' } } })
+  })
+
+  it('keeps a cancelled traveller visible when every rest seat is occupied', () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.connectWorkerNodes('rest-1', research.value.id, 2)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.hireCat()
+    simulation.hireCat()
+    simulation.hireCat()
+
+    expect(node(simulation, 'rest').slots.every((slot) => slot.catId)).toBe(true)
+    expect(simulation.cancelCatWorkDestination('cat-1')).toMatchObject({ ok: true })
+    expect(cat(simulation)).toMatchObject({ nodeId: 'rest-1', slotId: null, status: 'stranded', travel: null, stranded: { targetNodeId: 'rest-1', targetSlotId: null } })
+    expect(node(simulation, 'research').slots[0]).toMatchObject({ assignedCatId: null, reservedByCatId: null })
+  })
+
+  it('cancels a stranded work destination from the cat current node', () => {
+    const simulation = new Simulation()
+    const research = createResearch(simulation)
+    const server = simulation.createNode('server')
+    if (!server.ok) throw new Error(server.reason)
+    simulation.assignCat('cat-1', research.id, research.slots[0].id)
+    simulation.tick(1)
+    simulation.assignCat('cat-1', server.value.id, server.value.slots[0].id)
+
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, status: 'stranded', stranded: { targetNodeId: server.value.id } })
+    simulation.disconnectWorkerLink(simulation.snapshot().workerLinks[0].id)
+    expect(simulation.cancelCatWorkDestination('cat-1')).toMatchObject({ ok: true })
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === server.value.id)?.slots[0]).toMatchObject({ assignedCatId: null, reservedByCatId: null })
+    expect(cat(simulation)).toMatchObject({ nodeId: research.id, status: 'stranded', travel: null, stranded: { targetNodeId: 'rest-1' } })
+  })
+
   it('keeps a worker in its source slot when the transfer target is occupied', () => {
     const simulation = new Simulation()
     const research = simulation.createNode('research')
@@ -626,6 +734,24 @@ describe('Simulation flight era', () => {
     expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', flightProgress: 0.5 })
     simulation.tick(0.5)
     expect(simulation.snapshot().nodes.find((candidate) => candidate.id === destination.value.id)?.slots.some((slot) => slot.catId === 'cat-2')).toBe(true)
+  })
+
+  it('cancels a flight destination at its origin and seats the cat there immediately', () => {
+    const simulation = new Simulation()
+    unlockFlight(simulation)
+    const destination = simulation.createNode('research')
+    if (!destination.ok) throw new Error(destination.reason)
+    simulation.setNodePosition('rest-1', { x: 0, y: 0 })
+    simulation.setNodePosition(destination.value.id, { x: 500, y: 0 })
+    simulation.hireCat()
+    simulation.tick(5)
+    simulation.assignCat('cat-2', destination.value.id, destination.value.slots[0].id)
+    simulation.tick(0.5)
+
+    expect(cat(simulation, 'cat-2').travel).toMatchObject({ kind: 'flight', fromNodeId: 'rest-1', flightProgress: 0.5 })
+    expect(simulation.cancelCatWorkDestination('cat-2')).toMatchObject({ ok: true })
+    expect(cat(simulation, 'cat-2')).toMatchObject({ nodeId: 'rest-1', slotId: expect.any(String), status: 'idle', travel: null, stranded: null })
+    expect(simulation.snapshot().nodes.find((candidate) => candidate.id === destination.value.id)?.slots[0]).toMatchObject({ assignedCatId: null, reservedByCatId: null })
   })
 
   it('resumes a stranded cat when research progress reaches the flight threshold', () => {

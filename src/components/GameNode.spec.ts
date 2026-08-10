@@ -109,6 +109,55 @@ describe('GameNode', () => {
     expect(onSlotClick).toHaveBeenCalledTimes(1)
   })
 
+  it('highlights and explains an indirect slot for the selected assigned cat', async () => {
+    const onSlotClick = vi.fn()
+    const wrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: null, assignedCatId: 'cat-1' }], dataBuffer: 0, dataStored: 0, productionRate: 0, inputRate: 0, dataSold: 0, outputRate: 0 },
+          cats: { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'rest-1', slotId: 'rest-1-slot-1', status: 'idle', travel: null, vigor: 50 } },
+          restWaitingCats: [], selectedCatId: 'cat-1', selectedSlotId: null, onCatClick: vi.fn(), onSlotClick,
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+
+    expect(wrapper.find('.worker-slot').classes()).toContain('worker-slot--selected')
+    expect(wrapper.find('.worker-slot').attributes('title')).toContain('снимет рабочее назначение')
+    await wrapper.find('.worker-slot').trigger('click')
+    expect(onSlotClick).toHaveBeenCalledWith('research-1', 'slot-1', null, null, 'cat-1')
+  })
+
+  it('highlights a selected reserved cat and distinguishes work and rest destinations', () => {
+    const cats = { 'cat-1': { id: 'cat-1', name: 'Мира', variant: '◕', nodeId: 'rest-1', slotId: null, status: 'travelling' as const, travel: null, vigor: 100 } }
+    const workWrapper = mount(GameNode, {
+      props: {
+        id: 'research-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'research-1', type: 'research', name: 'Исследования', slots: [{ id: 'slot-1', catId: null, reservedByCatId: 'cat-1', assignedCatId: 'cat-1' }], dataBuffer: 0, dataStored: 0, productionRate: 0, inputRate: 0, dataSold: 0, outputRate: 0 },
+          cats, restWaitingCats: [], selectedCatId: 'cat-1', selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+    const restWrapper = mount(GameNode, {
+      props: {
+        id: 'rest-1', type: 'game', selected: false, connectable: true, position: { x: 0, y: 0 }, dimensions: { width: 0, height: 0 }, dragging: false, resizing: false, zIndex: 0, events: {} as any,
+        data: {
+          node: { id: 'rest-1', type: 'rest', name: 'Комната отдыха', slots: [{ id: 'rest-1-slot-1', catId: null, reservedByCatId: 'cat-1', assignedCatId: null }], dataBuffer: 0, dataStored: 0, productionRate: 0, inputRate: 0, dataSold: 0, outputRate: 0 },
+          cats, restWaitingCats: [], selectedCatId: 'cat-1', selectedSlotId: null, onCatClick: vi.fn(), onSlotClick: vi.fn(),
+        },
+      },
+      global: { stubs: { Handle: true } },
+    })
+
+    expect(workWrapper.find('.worker-slot').classes()).toContain('worker-slot--selected')
+    expect(workWrapper.find('.worker-slot').attributes('title')).toContain('отменит цель')
+    expect(restWrapper.find('.worker-slot').classes()).toContain('worker-slot--selected')
+    expect(restWrapper.find('.worker-slot').attributes('title')).toContain('будущего назначения')
+  })
+
   it('renders a stranded cat at an ordinary module', () => {
     const wrapper = mount(GameNode, {
       props: {

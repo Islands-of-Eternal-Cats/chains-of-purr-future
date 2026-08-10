@@ -43,6 +43,18 @@ function isUnassignedRestCat(slot: WorkSlot) {
   return props.data.node.type === 'rest' && Boolean(slot.catId && props.data.unassignedRestCatIds?.includes(slot.catId))
 }
 
+function representsSelectedCat(slot: WorkSlot) {
+  return Boolean(props.data.selectedCatId && [slot.catId, slot.reservedByCatId, slot.assignedCatId].includes(props.data.selectedCatId))
+}
+
+function slotTitle(slot: WorkSlot) {
+  if (slot.catId && props.data.node.type !== 'rest') return 'Нажмите, чтобы выбрать кота. Повторный клик отправит его отдыхать.'
+  if (slot.reservedByCatId && props.data.node.type === 'rest') return 'Нажмите, чтобы выбрать кота. Выберите рабочий слот для будущего назначения.'
+  if (slot.reservedByCatId) return 'Нажмите, чтобы выбрать кота. Повторный клик отменит цель и отправит его отдыхать.'
+  if (slot.assignedCatId) return 'Нажмите, чтобы выбрать кота. Повторный клик снимет рабочее назначение.'
+  return undefined
+}
+
 const nodeIcons = { rest: '⌂', research: '✦', server: '▦', hub: '◆', terminal: '₡' }
 const nodeSubtitles = {
   rest: 'Кот-операторы в резерве',
@@ -104,9 +116,9 @@ const nodeSubtitles = {
           v-for="slot in data.node.slots"
           :key="slot.id"
           class="worker-slot nodrag nopan"
-          :class="{ 'worker-slot--selected': slot.catId === data.selectedCatId || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--unassigned': isUnassignedRestCat(slot), 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
+          :class="{ 'worker-slot--selected': representsSelectedCat(slot) || slot.id === data.selectedSlotId, 'worker-slot--occupied': slot.catId, 'worker-slot--reserved': slot.reservedByCatId, 'worker-slot--assigned': slot.assignedCatId, 'worker-slot--unassigned': isUnassignedRestCat(slot), 'worker-slot--exhausted': data.node.type !== 'rest' && slot.catId && (data.cats[slot.catId]?.vigor ?? 0) <= 0, 'worker-slot--unreachable': cannotReachAssignedSlot(slot) }"
           type="button"
-          :title="data.node.type !== 'rest' && slot.catId ? 'Нажмите, чтобы выбрать кота. Повторный клик отправит его отдыхать.' : undefined"
+          :title="slotTitle(slot)"
           :disabled="data.blocked"
           @click.stop="data.onSlotClick(data.node.id, slot.id, slot.catId, slot.reservedByCatId, slot.assignedCatId)"
         >

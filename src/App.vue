@@ -321,7 +321,12 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   const nodeName = snapshot.value.nodes.find((node) => node.id === nodeId)?.name ?? 'узел'
   const result = simulation.assignCat(catId, nodeId, slotId)
   const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === catId) : undefined
-  const success = updatedCat?.status === 'stranded'
+  const activeTargetNode = updatedCat
+    ? snapshot.value.nodes.find((node) => node.id === (updatedCat.travel?.targetNodeId ?? updatedCat.stranded?.targetNodeId))
+    : undefined
+  const success = activeTargetNode?.type === 'rest'
+    ? `${cat?.name ?? 'Кот'} закреплён за местом в модуле «${nodeName}» и отправится туда после отдыха.`
+    : updatedCat?.status === 'stranded'
     ? `${cat?.name ?? 'Кот'} переназначен, но путь к новому месту недоступен.`
     : updatedCat?.status === 'travelling'
     ? `${cat?.name ?? 'Кот'} закреплён за местом и идёт к модулю: ${nodeName}.`
@@ -336,14 +341,6 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
 
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
-  if (cat.status === 'travelling') {
-    status.value = `${cat.name} уже находится в пути.`
-    return
-  }
-  if (cat.status === 'stranded') {
-    status.value = `${cat.name}: путь к назначенной цели недоступен.`
-    return
-  }
   if (selectedSlot.value) {
     const target = selectedSlot.value
     if (assignCatToWorkSlot(catId, target.nodeId, target.slotId)) {
@@ -354,8 +351,13 @@ function selectCat(catId: string) {
   }
   selectedCatId.value = selectedCatId.value === catId ? null : catId
   const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
+  const activeTargetNode = snapshot.value.nodes.find((node) => node.id === (cat.travel?.targetNodeId ?? cat.stranded?.targetNodeId))
   status.value = selectedCatId.value
-    ? currentNode?.type !== 'rest' && currentNode?.type !== 'hub' && cat.slotId
+    ? activeTargetNode?.type === 'rest'
+      ? `${cat.name} выбран. Выберите рабочее место для назначения после отдыха.`
+      : activeTargetNode && activeTargetNode.type !== 'hub'
+        ? `${cat.name} выбран. Выберите новую рабочую цель или нажмите текущую цель ещё раз, чтобы отменить её.`
+        : currentNode?.type !== 'rest' && currentNode?.type !== 'hub' && cat.slotId
       ? `${cat.name} выбран. Выберите новое рабочее место или нажмите текущий слот ещё раз, чтобы отправить кота отдыхать.`
       : `${cat.name} выбран. Кликните по рабочему слоту.`
     : 'Выбор кота отменён.'
@@ -363,14 +365,15 @@ function selectCat(catId: string) {
 
 function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null, assignedCatId: string | null) {
   const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
-  if (occupiedCatId) {
-    if (selectedCatId.value && occupiedCatId !== selectedCatId.value) {
-      status.value = 'Этот слот уже занят. Выбранный кот остался на текущей работе.'
+  const representedCatId = occupiedCatId ?? reservedCatId ?? assignedCatId
+  if (representedCatId) {
+    if (selectedCatId.value !== representedCatId) {
+      selectCat(representedCatId)
       return
     }
-    if (selectedCatId.value === occupiedCatId && targetNode?.type !== 'rest' && targetNode?.type !== 'hub') {
-      const cat = catIndex.value[occupiedCatId]
-      const result = simulation.releaseCat(occupiedCatId)
+    if (occupiedCatId && targetNode?.type !== 'rest' && targetNode?.type !== 'hub') {
+      const cat = catIndex.value[representedCatId]
+      const result = simulation.releaseCat(representedCatId)
       const updatedCat = result.ok ? simulation.snapshot().cats.find((candidate) => candidate.id === occupiedCatId) : undefined
       report(result, updatedCat?.status === 'travelling'
         ? `${cat?.name ?? 'Кот'} снят с работы и идёт отдыхать.`
@@ -378,22 +381,29 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
       if (result.ok) selectedCatId.value = null
       return
     }
-    selectCat(occupiedCatId)
-    return
-  }
-  if (reservedCatId) {
-    status.value = selectedCatId.value
-      ? 'Этот слот уже зарезервирован. Выбранный кот остался на текущей работе.'
-      : `${catIndex.value[reservedCatId]?.name ?? 'Кот'} уже идёт к этому слоту.`
+    if (reservedCatId) {
+      if (targetNode?.type === 'rest') {
+        status.value = `${catIndex.value[representedCatId]?.name ?? 'Кот'} продолжает путь на отдых. Выберите рабочее место для будущего назначения.`
+        return
+      }
+      const cat = catIndex.value[representedCatId]
+      const result = simulation.cancelCatWorkDestination(representedCatId)
+      report(result, `${cat?.name ?? 'Кот'} больше не следует к прежней цели и возвращается отдыхать.`)
+      if (result.ok) selectedCatId.value = null
+      return
+    }
+    if (assignedCatId && targetNode?.type !== 'rest' && targetNode?.type !== 'hub') {
+      const cat = catIndex.value[representedCatId]
+      const result = simulation.clearWorkAssignment(nodeId, slotId)
+      report(result, `${cat?.name ?? 'Кот'} больше не закреплён за этим местом.`)
+      if (result.ok) selectedCatId.value = null
+      return
+    }
+    selectCat(representedCatId)
     return
   }
   if (targetNode?.type === 'rest') {
     status.value = 'Все кресла в комнате отдыха используются совместно.'
-    return
-  }
-  if (assignedCatId && !selectedCatId.value) {
-    const cat = catIndex.value[assignedCatId]
-    report(simulation.clearWorkAssignment(nodeId, slotId), `${cat?.name ?? 'Кот'} больше не закреплён за этим местом.`)
     return
   }
   if (!selectedCatId.value) {

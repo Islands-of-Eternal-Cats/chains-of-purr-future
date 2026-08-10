@@ -161,4 +161,106 @@ describe('App economy controls', () => {
     expect(wrapper.find('.graph-status').text()).toContain('снят с работы')
     wrapper.unmount()
   })
+
+  it('selects a resting assignment, replaces another cat selection, and clears it on repeat', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.connectWorkerNodes('rest-1', research.value.id, 1)
+    simulation.hireCat()
+    simulation.assignCat('cat-2', research.value.id, research.value.slots[0].id)
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const sourceSelector = `.slot-${research.value.slots[0].id}`
+    await wrapper.find('.slot-rest-1-slot-1').trigger('click')
+    expect(wrapper.find('.graph-status').text()).toContain('Мира выбран')
+
+    await wrapper.find(sourceSelector).trigger('click')
+    expect(wrapper.find('.graph-status').text()).toContain('Нокс выбран')
+    expect(wrapper.find(sourceSelector).attributes('data-assigned')).toBe('cat-2')
+
+    await wrapper.find(sourceSelector).trigger('click')
+    expect(wrapper.find(sourceSelector).attributes('data-assigned')).toBeUndefined()
+    expect(wrapper.find('.graph-status').text()).toContain('больше не закреплён')
+    wrapper.unmount()
+  })
+
+  it('selects and cancels an active work destination on the repeated click', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    if (!research.ok) throw new Error(research.reason)
+    simulation.connectWorkerNodes('rest-1', research.value.id, 4)
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const targetSelector = `.slot-${research.value.slots[0].id}`
+    await wrapper.find(targetSelector).trigger('click')
+    expect(wrapper.find('.graph-status').text()).toContain('новую рабочую цель')
+    expect(wrapper.find(targetSelector).attributes('data-reserved')).toBe('cat-1')
+
+    await wrapper.find(targetSelector).trigger('click')
+    expect(wrapper.find(targetSelector).attributes('data-reserved')).toBeUndefined()
+    expect(wrapper.find(targetSelector).attributes('data-assigned')).toBeUndefined()
+    expect(wrapper.find('.slot-rest-1-slot-1').attributes('data-cat')).toBe('cat-1')
+    expect(wrapper.find('.graph-status').text()).toContain('возвращается отдыхать')
+    wrapper.unmount()
+  })
+
+  it('redirects a cat selected through its active work destination', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing redirect setup')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const oldTarget = `.slot-${research.value.slots[0].id}`
+    const newTarget = `.slot-${server.value.slots[0].id}`
+    await wrapper.find(oldTarget).trigger('click')
+    await wrapper.find(newTarget).trigger('click')
+
+    expect(wrapper.find(oldTarget).attributes('data-assigned')).toBeUndefined()
+    expect(wrapper.find(oldTarget).attributes('data-reserved')).toBeUndefined()
+    expect(wrapper.find(newTarget).attributes('data-assigned')).toBe('cat-1')
+    expect(wrapper.find(newTarget).attributes('data-reserved')).toBe('cat-1')
+    expect(wrapper.find('.graph-status').text()).toContain('идёт к модулю')
+    wrapper.unmount()
+  })
+
+  it('keeps a return-to-rest target while assigning the selected cat future work', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    const hub = simulation.createNode('hub')
+    if (!research.ok || !server.ok || !hub.ok) throw new Error('Missing future-work setup')
+    simulation.connectWorkerNodes('rest-1', hub.value.id, 1, 'road', 'west')
+    simulation.connectWorkerNodes(hub.value.id, research.value.id, 1, 'north', 'road')
+    simulation.connectWorkerNodes(hub.value.id, server.value.id, 1, 'east', 'road')
+    simulation.assignCat('cat-1', research.value.id, research.value.slots[0].id)
+    simulation.tick(2)
+    simulation.releaseCat('cat-1')
+    window.localStorage.setItem('catmand-save-v1', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const restTarget = '.slot-rest-1-slot-1'
+    const futureWork = `.slot-${server.value.slots[0].id}`
+    await wrapper.find(restTarget).trigger('click')
+    await wrapper.find(restTarget).trigger('click')
+    expect(wrapper.find(restTarget).attributes('data-reserved')).toBe('cat-1')
+    expect(wrapper.find('.graph-status').text()).toContain('продолжает путь на отдых')
+
+    await wrapper.find(futureWork).trigger('click')
+    expect(wrapper.find(restTarget).attributes('data-reserved')).toBe('cat-1')
+    expect(wrapper.find(futureWork).attributes('data-assigned')).toBe('cat-1')
+    expect(wrapper.find(futureWork).attributes('data-reserved')).toBeUndefined()
+    expect(wrapper.find('.graph-status').text()).toContain('после отдыха')
+    wrapper.unmount()
+  })
 })
