@@ -13,7 +13,7 @@ type FlowCoordinateApi = { screenToFlowCoordinate: (position: Point) => Point }
 type SimulationSpeed = 0 | 1 | 5 | 10 | 100
 type SpeedOption = { value: SimulationSpeed; label: string; shortcut?: string }
 
-const SAVE_KEY = 'catmand-save-v2'
+const SAVE_KEY = 'catmand-save-v5'
 const SAVE_WARNING_KEY = 'catmand-save-warning-acknowledged'
 const appVersion = __APP_VERSION__
 let initialSaveError = ''
@@ -81,8 +81,12 @@ const totalData = computed(() => snapshot.value.nodes.reduce((total, node) => to
 const netIncomePerMinute = computed(() => snapshot.value.economy.revenuePerMinute - snapshot.value.economy.upkeepPerMinute)
 const scienceGoalComplete = computed(() => snapshot.value.flightUnlocked)
 const flightResearchProgress = computed(() => Math.min(totalScience.value / GAME_BALANCE.science.flightUnlockProgress * 100, 100))
-const salesGoalComplete = computed(() => snapshot.value.economy.totalDataSold >= GAME_BALANCE.objective.dataSoldTarget)
-const economyGoalComplete = computed(() => netIncomePerMinute.value >= 0)
+const researchNodes = computed(() => snapshot.value.nodes.filter((node) => node.type === 'research'))
+const fullyStaffedResearchCount = computed(() => researchNodes.value.filter((node) => !node.blocked && node.slots.every((slot) => slot.assignedCatId !== null)).length)
+const requiredResearchDisplayCount = computed(() => Math.max(researchNodes.value.length, GAME_BALANCE.objective.requiredResearchNodes))
+const researchGoalComplete = computed(() => researchNodes.value.length >= GAME_BALANCE.objective.requiredResearchNodes && fullyStaffedResearchCount.value === researchNodes.value.length)
+const profitGoalComplete = computed(() => snapshot.value.goal.achieved || snapshot.value.goal.profitableSeconds >= GAME_BALANCE.objective.requiredProfitableSeconds)
+const profitTimerProgress = computed(() => Math.min(snapshot.value.goal.profitableSeconds / GAME_BALANCE.objective.requiredProfitableSeconds * 100, 100))
 const selectedCat = computed(() => selectedCatId.value ? catIndex.value[selectedCatId.value] : undefined)
 const canDismissSelectedCat = computed(() => Boolean(selectedCat.value && selectedCat.value.id !== 'cat-1'))
 
@@ -106,6 +110,12 @@ const expenseAriaLabel = computed(() => `Расходы ${formatGameNumber(snaps
 function formatSignedGameNumber(value: number) {
   const normalized = Math.abs(value) < 0.000001 ? 0 : value
   return `${normalized > 0 ? '+' : ''}${formatGameNumber(normalized)}`
+}
+
+function formatGoalDuration(seconds: number) {
+  const clampedSeconds = Math.floor(Math.min(Math.max(seconds, 0), GAME_BALANCE.objective.requiredProfitableSeconds))
+  const minutes = Math.floor(clampedSeconds / 60)
+  return `${minutes}:${String(clampedSeconds % 60).padStart(2, '0')}`
 }
 
 function nodePosition(node: SimNode): Point {
@@ -397,8 +407,17 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   return result.ok
 }
 
+function clearAllSelections() {
+  selectedCatId.value = null
+  selectedSlot.value = null
+  selectedConnection.value = null
+  selectedModuleId.value = null
+}
+
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
+  selectedConnection.value = null
+  selectedModuleId.value = null
   if (selectedSlot.value) {
     const target = selectedSlot.value
     if (assignCatToWorkSlot(catId, target.nodeId, target.slotId)) {
@@ -407,7 +426,9 @@ function selectCat(catId: string) {
     }
     return
   }
-  selectedCatId.value = selectedCatId.value === catId ? null : catId
+  const wasSelected = selectedCatId.value === catId
+  clearAllSelections()
+  selectedCatId.value = wasSelected ? null : catId
   const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
   const activeTargetNode = snapshot.value.nodes.find((node) => node.id === (cat.travel?.targetNodeId ?? cat.stranded?.targetNodeId))
   status.value = selectedCatId.value
@@ -422,6 +443,8 @@ function selectCat(catId: string) {
 }
 
 function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null, assignedCatId: string | null) {
+  selectedConnection.value = null
+  selectedModuleId.value = null
   const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
   const representedCatId = occupiedCatId ?? reservedCatId ?? assignedCatId
   if (representedCatId) {
@@ -474,10 +497,9 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
 }
 
 function cancelCatSelection(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || (!selectedCatId.value && !selectedSlot.value)) return
-  selectedCatId.value = null
-  selectedSlot.value = null
-  status.value = 'Выбор кота или слота отменён.'
+  if (event.key !== 'Escape' || (!selectedCatId.value && !selectedSlot.value && !selectedConnection.value && !selectedModuleId.value)) return
+  clearAllSelections()
+  status.value = 'Выбор отменён.'
 }
 
 function onConnect(connection: FlowConnection) {
@@ -494,8 +516,9 @@ function onConnect(connection: FlowConnection) {
 }
 
 function selectConnection(event: EdgeMouseEvent) {
-  if (selectedConnection.value?.id === event.edge.id) {
-    selectedConnection.value = null
+  const wasSelected = selectedConnection.value?.id === event.edge.id
+  clearAllSelections()
+  if (wasSelected) {
     status.value = 'Выбор связи отменён.'
     return
   }
@@ -504,13 +527,14 @@ function selectConnection(event: EdgeMouseEvent) {
 }
 
 function selectModule(event: NodeMouseEvent) {
+  const wasSelected = selectedModuleId.value === event.node.id
+  clearAllSelections()
   if (event.node.data.node.blocked) {
     status.value = `${event.node.data.node.name} перекрыт другим узлом. Переместите его, чтобы восстановить доступ.`
     return
   }
-  const isSelected = selectedModuleId.value === event.node.id
-  selectedModuleId.value = isSelected ? null : event.node.id
-  status.value = isSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
+  selectedModuleId.value = wasSelected ? null : event.node.id
+  status.value = wasSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
 }
 
 function disconnectSelected() {
@@ -599,7 +623,7 @@ function downloadText(contents: string, filename: string) {
 }
 
 function exportGame() {
-  downloadText(JSON.stringify(simulation.exportSave(), null, 2), 'catmand-save-v2.json')
+  downloadText(JSON.stringify(simulation.exportSave(), null, 2), 'catmand-save-v5.json')
   status.value = 'Сохранение выгружено в JSON.'
 }
 
@@ -749,7 +773,7 @@ onBeforeUnmount(() => {
         <p>ЦЕЛЬ ДОСТИГНУТА</p>
         <h2 id="goal-modal-title">АВТОНОМНАЯ ЛАБОРАТОРИЯ</h2>
         <div id="goal-modal-description">
-          <p>Воздушная эра открыта, первый контракт выполнен, а торговля покрывает содержание сети.</p>
+          <p>Все исследовательские лаборатории укомплектованы, воздушная эра открыта, сеть сохраняла прибыль пять минут и достигла чистого дохода 500 кредитов в минуту.</p>
           <p>Испытание PoC завершено — лабораторию можно развивать дальше.</p>
         </div>
         <button ref="goalContinueButton" type="button" @click="continueAfterGoal">Продолжить играть</button>
@@ -849,18 +873,33 @@ onBeforeUnmount(() => {
             <span>ЦЕЛЬ PoC</span>
             <strong id="objective-title">АВТОНОМНАЯ ЛАБОРАТОРИЯ</strong>
           </div>
+          <div class="objective-condition" :class="{ 'objective-condition--complete': snapshot.goal.achieved || researchGoalComplete }">
+            <span aria-hidden="true">{{ snapshot.goal.achieved || researchGoalComplete ? '✓' : '○' }}</span>
+            <div><small>ЛАБОРАТОРИИ УКОМПЛЕКТОВАНЫ</small><strong>{{ fullyStaffedResearchCount }} / {{ requiredResearchDisplayCount }}</strong></div>
+          </div>
           <div class="objective-condition" :class="{ 'objective-condition--complete': scienceGoalComplete }">
             <span aria-hidden="true">{{ scienceGoalComplete ? '✓' : '○' }}</span>
             <div><small>ВОЗДУШНАЯ ЭРА</small><strong>{{ scienceGoalComplete ? 'ЗАВЕРШЕНА' : 'ИССЛЕДУЕТСЯ' }}</strong></div>
           </div>
-          <div class="objective-condition" :class="{ 'objective-condition--complete': salesGoalComplete }">
-            <span aria-hidden="true">{{ salesGoalComplete ? '✓' : '○' }}</span>
-            <div><small>ПЕРВЫЙ КОНТРАКТ</small><strong>{{ formatGameNumber(Math.min(snapshot.economy.totalDataSold, GAME_BALANCE.objective.dataSoldTarget)) }} / {{ formatGameNumber(GAME_BALANCE.objective.dataSoldTarget) }} данных</strong></div>
+          <div class="objective-condition" :class="{ 'objective-condition--complete': snapshot.goal.peakNetIncomePerMinute >= GAME_BALANCE.objective.requiredPeakNetIncomePerMinute }">
+            <span aria-hidden="true">{{ snapshot.goal.peakNetIncomePerMinute >= GAME_BALANCE.objective.requiredPeakNetIncomePerMinute ? '✓' : '○' }}</span>
+            <div><small>ПИКОВАЯ ПРИБЫЛЬ</small><strong>{{ formatGameNumber(snapshot.goal.peakNetIncomePerMinute) }} / {{ formatGameNumber(GAME_BALANCE.objective.requiredPeakNetIncomePerMinute) }} /МИН</strong></div>
           </div>
-          <div class="objective-condition" :class="{ 'objective-condition--complete': snapshot.goal.achieved || economyGoalComplete }">
-            <span aria-hidden="true">{{ snapshot.goal.achieved || economyGoalComplete ? '✓' : '○' }}</span>
-            <div><small>САМООКУПАЕМОСТЬ</small><strong>{{ formatSignedGameNumber(netIncomePerMinute) }}/мин</strong></div>
+          <div class="objective-condition objective-condition--timer" :class="{ 'objective-condition--complete': profitGoalComplete }">
+            <span aria-hidden="true">{{ profitGoalComplete ? '✓' : '○' }}</span>
+            <div class="objective-timer">
+              <div><small>СТАБИЛЬНАЯ ПРИБЫЛЬ</small><strong>{{ formatGoalDuration(snapshot.goal.profitableSeconds) }} / {{ formatGoalDuration(GAME_BALANCE.objective.requiredProfitableSeconds) }}</strong></div>
+              <div
+                class="objective-timer__progress"
+                role="progressbar"
+                aria-label="Непрерывное время прибыльной работы"
+                :aria-valuenow="Math.min(snapshot.goal.profitableSeconds, GAME_BALANCE.objective.requiredProfitableSeconds)"
+                aria-valuemin="0"
+                :aria-valuemax="GAME_BALANCE.objective.requiredProfitableSeconds"
+              ><span :style="{ width: `${profitTimerProgress}%` }"></span></div>
+            </div>
           </div>
+          <p v-if="!snapshot.goal.achieved" class="objective-card__hint">Нужно минимум две лаборатории с назначениями 2/2. Таймер сбрасывается при доходе ≤ расходов; достигнутый пик 500/мин сохраняется.</p>
           <p v-if="snapshot.goal.acknowledged" class="objective-card__sandbox">ЦЕЛЬ ДОСТИГНУТА · ПЕСОЧНИЦА ПРОДОЛЖАЕТСЯ</p>
         </section>
         <p class="panel-label">КОНСТРУКТОР СЕТИ</p>
@@ -932,7 +971,7 @@ onBeforeUnmount(() => {
             <path class="connection-preview" :d="`M ${sourceX},${sourceY} L ${targetX},${targetY}`" />
           </template>
         </VueFlow>
-        <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot }"><span class="status-dot"></span>{{ status }}</div>
+        <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot || selectedConnection || selectedModuleId }"><span class="status-dot"></span>{{ status }}</div>
         <div class="canvas-caption"><span>LIVE SIMULATION</span><b>{{ formatGameNumber(simulationSpeed) }}×</b></div>
       </section>
     </section>

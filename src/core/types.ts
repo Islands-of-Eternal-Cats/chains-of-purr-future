@@ -104,6 +104,8 @@ export interface UpkeepBreakdown {
 export interface PocGoalSnapshot {
   achieved: boolean
   acknowledged: boolean
+  profitableSeconds: number
+  peakNetIncomePerMinute: number
 }
 
 export interface WorkerLink {
@@ -126,19 +128,21 @@ export interface SimulationSnapshot {
   goal: PocGoalSnapshot
 }
 
-export interface PersistedEconomyV2 {
+export interface PersistedEconomyV5 {
   credits: number
   totalEarned: number
   totalSpent: number
   totalDataSold: number
 }
 
-export interface PersistedPocGoalV2 {
+export interface PersistedPocGoalV5 {
   achieved: boolean
   acknowledged: boolean
+  profitableSeconds: number
+  peakNetIncomePerMinute: number
 }
 
-export interface SimulationStateV2 {
+export interface SimulationStateV5 {
   nodes: SimNode[]
   cats: Cat[]
   connections: Connection[]
@@ -147,13 +151,13 @@ export interface SimulationStateV2 {
   catCounter: number
   flightUnlocked: boolean
   scienceProgress: number
-  economy: PersistedEconomyV2
-  goal: PersistedPocGoalV2
+  economy: PersistedEconomyV5
+  goal: PersistedPocGoalV5
 }
 
-export interface GameSaveV2 {
-  version: 2
-  simulation: SimulationStateV2
+export interface GameSaveV5 {
+  version: 5
+  simulation: SimulationStateV5
 }
 
 export type CommandResult<T = void> =

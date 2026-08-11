@@ -86,10 +86,17 @@ button { font: inherit; }
 .objective-card__heading strong { color: #cceef6; font: 600 10px/1.2 'DM Mono', monospace; letter-spacing: .06em; }
 .objective-condition { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 6px; padding: 6px 0; border-top: 1px solid rgba(146, 177, 192, .1); color: #657e8e; }
 .objective-condition > span { font: 13px/1 'DM Mono', monospace; text-align: center; }
-.objective-condition div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.objective-condition > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; }
 .objective-condition small { overflow: hidden; color: #718596; font: 7px/1.2 'DM Mono', monospace; letter-spacing: .06em; text-overflow: ellipsis; white-space: nowrap; }
 .objective-condition strong { color: #8ba0ad; font: 500 8px/1.2 'DM Mono', monospace; text-align: right; white-space: nowrap; }
 .objective-condition--complete > span, .objective-condition--complete strong { color: #8de2a2; }
+.objective-condition--timer { align-items: start; }
+.objective-timer { display: grid !important; gap: 5px !important; }
+.objective-timer > div:first-child { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.objective-timer__progress { height: 4px; overflow: hidden; border-radius: 2px; background: rgba(139, 160, 173, .13); box-shadow: inset 0 0 0 1px rgba(151, 180, 198, .1); }
+.objective-timer__progress span { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #d39a4d, #ffd17e); box-shadow: 0 0 8px rgba(255, 193, 96, .4); transition: width .2s ease; }
+.objective-condition--complete .objective-timer__progress span { background: linear-gradient(90deg, #58b879, #9aebab); box-shadow: 0 0 8px rgba(120, 205, 151, .4); }
+.objective-card__hint { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid rgba(146, 177, 192, .1); color: #647e8e; font: 7px/1.45 'DM Mono', monospace; }
 .objective-card__sandbox { margin: 9px 0 0; padding-top: 9px; border-top: 1px solid rgba(120, 205, 151, .2); color: #8de2a2; font: 500 7px/1.4 'DM Mono', monospace; letter-spacing: .06em; text-align: center; }
 .panel-label { margin: 0 0 12px 5px; }
 .action-button, .hire-button { width: 100%; min-height: 46px; display: flex; align-items: center; gap: 10px; margin: 0 0 9px; padding: 0 13px; border: 1px solid rgba(152, 179, 195, .22); border-radius: 3px; color: #bed0dd; background: rgba(123, 153, 170, .06); text-align: left; font-size: 12px; cursor: pointer; transition: .18s ease; }

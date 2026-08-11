@@ -814,22 +814,55 @@ describe('Simulation flight era', () => {
 })
 
 describe('Simulation cozy economy and data network', () => {
-  function objectiveCandidate(scienceProgress: number, totalDataSold: number, storedData: number) {
+  function objectiveCandidate(options: {
+    scienceProgress?: number
+    researchNodes?: number
+    staffedResearchSlots?: number
+    terminalNodes?: number
+    storedData?: number
+    extraCats?: number
+    profitableSeconds?: number
+    peakNetIncomePerMinute?: number
+  } = {}) {
+    const {
+      scienceProgress = GAME_BALANCE.science.flightUnlockProgress,
+      researchNodes = GAME_BALANCE.objective.requiredResearchNodes,
+      staffedResearchSlots = researchNodes * GAME_BALANCE.nodes.research.slots,
+      terminalNodes = 2,
+      storedData = 1000,
+      extraCats = 0,
+      profitableSeconds = 0,
+      peakNetIncomePerMinute = GAME_BALANCE.objective.requiredPeakNetIncomePerMinute,
+    } = options
     const simulation = fundedSimulation()
+    const researchIds: string[] = []
+    for (let index = 0; index < researchNodes; index += 1) {
+      const research = simulation.createNode('research')
+      if (!research.ok) throw new Error(research.reason)
+      researchIds.push(research.value.id)
+    }
+    const assignmentCount = Math.min(staffedResearchSlots, researchNodes * GAME_BALANCE.nodes.research.slots)
+    for (let index = 1; index < assignmentCount + extraCats; index += 1) simulation.hireCat()
     const server = simulation.createNode('server')
-    const terminal = simulation.createNode('terminal')
-    if (!server.ok || !terminal.ok) throw new Error('Missing objective nodes')
-    simulation.connect(server.value.id, terminal.value.id)
+    if (!server.ok) throw new Error('Missing objective server')
+    const terminalIds: string[] = []
+    for (let index = 0; index < terminalNodes; index += 1) {
+      const terminal = simulation.createNode('terminal')
+      if (!terminal.ok) throw new Error(terminal.reason)
+      simulation.connect(server.value.id, terminal.value.id)
+      terminalIds.push(terminal.value.id)
+    }
     const save = simulation.exportSave()
     save.simulation.flightUnlocked = scienceProgress >= GAME_BALANCE.science.flightUnlockProgress
     save.simulation.scienceProgress = scienceProgress
     save.simulation.nodes.find((candidate) => candidate.id === server.value.id)!.dataStored = storedData
-    save.simulation.nodes.find((candidate) => candidate.id === terminal.value.id)!.dataSold = totalDataSold
-    save.simulation.economy.totalDataSold = totalDataSold
-    save.simulation.economy.totalEarned = totalDataSold * GAME_BALANCE.economy.dataSalePrice
+    save.simulation.goal.profitableSeconds = profitableSeconds
+    save.simulation.goal.peakNetIncomePerMinute = peakNetIncomePerMinute
+    const researchSlots = save.simulation.nodes.filter((candidate) => candidate.type === 'research').flatMap((candidate) => candidate.slots)
+    for (let index = 0; index < assignmentCount; index += 1) researchSlots[index].assignedCatId = save.simulation.cats[index].id
     const restored = Simulation.fromSave(save)
     if (!restored.ok) throw new Error(restored.reason)
-    return { simulation: restored.value, terminalId: terminal.value.id }
+    return { simulation: restored.value, researchIds, terminalIds }
   }
 
   it('defines balance for every node type and charges the shared configured prices', () => {
@@ -991,50 +1024,130 @@ describe('Simulation cozy economy and data network', () => {
     expect(simulation.snapshot().economy.debtWarning).toBe(false)
   })
 
-  it('requires every objective condition and unlocks exactly at the configured boundary', () => {
-    const missingScience = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress - 1, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1).simulation
+  it('starts stable-profit progress only after flight and at least two fully staffed clear research modules', () => {
+    const missingScience = objectiveCandidate({ scienceProgress: GAME_BALANCE.science.flightUnlockProgress - 1 }).simulation
     missingScience.tick(1)
-    expect(missingScience.snapshot().goal.achieved).toBe(false)
+    expect(missingScience.snapshot().goal.profitableSeconds).toBe(0)
 
-    const missingSale = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.26, 1).simulation
-    missingSale.tick(1)
-    expect(missingSale.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget - 0.01)
-    expect(missingSale.snapshot().goal.achieved).toBe(false)
+    const oneResearch = objectiveCandidate({ researchNodes: GAME_BALANCE.objective.requiredResearchNodes - 1 }).simulation
+    oneResearch.tick(1)
+    expect(oneResearch.snapshot().economy.revenuePerMinute).toBeGreaterThan(oneResearch.snapshot().economy.upkeepPerMinute)
+    expect(oneResearch.snapshot().goal.profitableSeconds).toBe(0)
 
-    const missingRevenue = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget, 0).simulation
-    missingRevenue.tick(1)
-    expect(missingRevenue.snapshot().economy.revenuePerMinute).toBe(0)
-    expect(missingRevenue.snapshot().goal.achieved).toBe(false)
+    const blockedResearch = objectiveCandidate()
+    const blockedId = blockedResearch.researchIds[1]
+    blockedResearch.simulation.setNodeBlocked(blockedId, true)
+    blockedResearch.simulation.tick(1)
+    expect(blockedResearch.simulation.snapshot().goal.profitableSeconds).toBe(0)
 
-    const ready = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1).simulation
-    expect(ready.acknowledgeGoal()).toMatchObject({ ok: false, reason: expect.stringContaining('ещё не') })
+    const emptySlot = objectiveCandidate({ staffedResearchSlots: GAME_BALANCE.objective.requiredResearchNodes * GAME_BALANCE.nodes.research.slots - 1 }).simulation
+    emptySlot.tick(1)
+    expect(emptySlot.snapshot().goal.profitableSeconds).toBe(0)
+
+    const extraUnstaffedResearch = objectiveCandidate({ researchNodes: 3, staffedResearchSlots: 4 }).simulation
+    extraUnstaffedResearch.tick(1)
+    expect(extraUnstaffedResearch.snapshot().goal.profitableSeconds).toBe(0)
+
+    const ready = objectiveCandidate().simulation
     ready.tick(1)
-    expect(ready.snapshot()).toMatchObject({
-      flightUnlocked: true,
-      economy: {
-        totalDataSold: GAME_BALANCE.objective.dataSoldTarget,
-        revenuePerMinute: expect.any(Number),
-      },
-      goal: { achieved: true, acknowledged: false },
-    })
-    expect(ready.snapshot().economy.revenuePerMinute).toBeGreaterThanOrEqual(ready.snapshot().economy.upkeepPerMinute)
+    expect(ready.snapshot().economy.revenuePerMinute).toBeGreaterThan(ready.snapshot().economy.upkeepPerMinute)
+    expect(ready.snapshot().nodes.filter((candidate) => candidate.type === 'research').flatMap((candidate) => candidate.slots)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ catId: null, assignedCatId: expect.any(String) })]),
+    )
+    expect(ready.snapshot().goal).toEqual({ achieved: false, acknowledged: false, profitableSeconds: 1, peakNetIncomePerMinute: GAME_BALANCE.objective.requiredPeakNetIncomePerMinute })
   })
 
-  it('keeps the achieved objective and cumulative sales after demolition, acknowledgement, and save/load', () => {
-    const { simulation, terminalId } = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1)
-    simulation.tick(1)
-    expect(simulation.deleteNode(terminalId).ok).toBe(true)
-    simulation.tick(1)
-    expect(simulation.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget)
-    expect(simulation.snapshot().goal.achieved).toBe(true)
-    expect(simulation.acknowledgeGoal().ok).toBe(true)
+  it('requires strictly positive income and resets partial progress on any failed running tick', () => {
+    const zeroIncome = objectiveCandidate({ extraCats: 2 }).simulation
+    zeroIncome.tick(1)
+    expect(zeroIncome.snapshot().economy.revenuePerMinute).toBeCloseTo(zeroIncome.snapshot().economy.upkeepPerMinute)
+    expect(zeroIncome.snapshot().goal.profitableSeconds).toBe(0)
 
-    const save = simulation.exportSave()
-    const restored = Simulation.fromSave(JSON.parse(JSON.stringify(save)))
-    if (!restored.ok) throw new Error(restored.reason)
-    expect(restored.value.snapshot().goal).toEqual({ achieved: true, acknowledged: true })
-    expect(restored.value.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget)
-    expect(restored.value.exportSave()).toEqual(save)
+    const candidate = objectiveCandidate({ profitableSeconds: 120 })
+    candidate.simulation.tick(0)
+    expect(candidate.simulation.snapshot().goal.profitableSeconds).toBe(120)
+    candidate.simulation.setNodeBlocked(candidate.researchIds[1], true)
+    candidate.simulation.tick(1)
+    expect(candidate.simulation.snapshot().goal.profitableSeconds).toBe(0)
+
+    const losingCandidate = objectiveCandidate({ profitableSeconds: 120, terminalNodes: 1 }).simulation
+    losingCandidate.tick(1)
+    expect(losingCandidate.snapshot().economy.revenuePerMinute).toBeLessThan(losingCandidate.snapshot().economy.upkeepPerMinute)
+    expect(losingCandidate.snapshot().goal.profitableSeconds).toBe(0)
+  })
+
+  it('records the 500-per-minute net-income peak once and keeps it after income falls', () => {
+    const belowTarget = objectiveCandidate({ terminalNodes: 15, peakNetIncomePerMinute: 0 }).simulation
+    belowTarget.tick(1)
+    const belowTargetIncome = belowTarget.snapshot().economy.revenuePerMinute - belowTarget.snapshot().economy.upkeepPerMinute
+    expect(belowTargetIncome).toBeLessThan(GAME_BALANCE.objective.requiredPeakNetIncomePerMinute)
+    expect(belowTarget.snapshot().goal.peakNetIncomePerMinute).toBeCloseTo(belowTargetIncome)
+
+    const candidate = objectiveCandidate({ terminalNodes: 17, peakNetIncomePerMinute: 0 })
+    candidate.simulation.tick(1)
+    const reachedPeak = candidate.simulation.snapshot().economy.revenuePerMinute - candidate.simulation.snapshot().economy.upkeepPerMinute
+    expect(reachedPeak).toBeGreaterThan(GAME_BALANCE.objective.requiredPeakNetIncomePerMinute)
+    expect(candidate.simulation.snapshot().goal.peakNetIncomePerMinute).toBeCloseTo(reachedPeak)
+
+    expect(candidate.simulation.deleteNode(candidate.terminalIds[0]).ok).toBe(true)
+    expect(candidate.simulation.deleteNode(candidate.terminalIds[1]).ok).toBe(true)
+    candidate.simulation.tick(1)
+    expect(candidate.simulation.snapshot().economy.revenuePerMinute - candidate.simulation.snapshot().economy.upkeepPerMinute).toBeLessThan(GAME_BALANCE.objective.requiredPeakNetIncomePerMinute)
+    expect(candidate.simulation.snapshot().goal.peakNetIncomePerMinute).toBeCloseTo(reachedPeak)
+  })
+
+  it('keeps the completed five-minute milestone while waiting for the independent income peak', () => {
+    const simulation = objectiveCandidate({ terminalNodes: 15, peakNetIncomePerMinute: 0 }).simulation
+    simulation.tick(GAME_BALANCE.objective.requiredProfitableSeconds)
+    expect(simulation.snapshot().goal).toEqual({
+      achieved: false,
+      acknowledged: false,
+      profitableSeconds: GAME_BALANCE.objective.requiredProfitableSeconds,
+      peakNetIncomePerMinute: expect.any(Number),
+    })
+
+    const terminal = simulation.snapshot().nodes.find((candidate) => candidate.type === 'terminal')
+    if (!terminal) throw new Error('Missing terminal')
+    simulation.deleteNode(terminal.id)
+    simulation.tick(1)
+    expect(simulation.snapshot().goal.profitableSeconds).toBe(GAME_BALANCE.objective.requiredProfitableSeconds)
+  })
+
+  it('achieves the objective at exactly five profitable simulation minutes and keeps it sticky', () => {
+    const candidate = objectiveCandidate()
+    const simulation = candidate.simulation
+    expect(simulation.acknowledgeGoal()).toMatchObject({ ok: false, reason: expect.stringContaining('ещё не') })
+    simulation.tick(GAME_BALANCE.objective.requiredProfitableSeconds - 0.1)
+    expect(simulation.snapshot().goal).toEqual({ achieved: false, acknowledged: false, profitableSeconds: GAME_BALANCE.objective.requiredProfitableSeconds - 0.1, peakNetIncomePerMinute: GAME_BALANCE.objective.requiredPeakNetIncomePerMinute })
+
+    simulation.tick(0.1)
+    expect(simulation.snapshot().goal).toEqual({ achieved: true, acknowledged: false, profitableSeconds: GAME_BALANCE.objective.requiredProfitableSeconds, peakNetIncomePerMinute: GAME_BALANCE.objective.requiredPeakNetIncomePerMinute })
+    expect(simulation.deleteNode(candidate.researchIds[1]).ok).toBe(true)
+    expect(simulation.deleteNode(candidate.terminalIds[1]).ok).toBe(true)
+    simulation.tick(1)
+    expect(simulation.snapshot().goal).toEqual({ achieved: true, acknowledged: false, profitableSeconds: GAME_BALANCE.objective.requiredProfitableSeconds, peakNetIncomePerMinute: GAME_BALANCE.objective.requiredPeakNetIncomePerMinute })
+  })
+
+  it('round-trips partial, peak, and acknowledged objective progress in version 5', () => {
+    const partial = objectiveCandidate({ profitableSeconds: 123.45 }).simulation
+    const partialSave = partial.exportSave()
+    const partialRestored = Simulation.fromSave(JSON.parse(JSON.stringify(partialSave)))
+    if (!partialRestored.ok) throw new Error(partialRestored.reason)
+    expect(partialRestored.value.snapshot().goal.profitableSeconds).toBeCloseTo(123.45)
+    expect(partialRestored.value.exportSave()).toEqual(partialSave)
+
+    const achieved = objectiveCandidate().simulation
+    achieved.tick(GAME_BALANCE.objective.requiredProfitableSeconds)
+    expect(achieved.acknowledgeGoal().ok).toBe(true)
+    const achievedSave = achieved.exportSave()
+    const achievedRestored = Simulation.fromSave(JSON.parse(JSON.stringify(achievedSave)))
+    if (!achievedRestored.ok) throw new Error(achievedRestored.reason)
+    expect(achievedRestored.value.snapshot().goal).toEqual({
+      achieved: true,
+      acknowledged: true,
+      profitableSeconds: GAME_BALANCE.objective.requiredProfitableSeconds,
+      peakNetIncomePerMinute: GAME_BALANCE.objective.requiredPeakNetIncomePerMinute,
+    })
   })
 
   it('round-trips versioned saves and rejects invalid versions or references atomically', () => {
@@ -1048,7 +1161,7 @@ describe('Simulation cozy economy and data network', () => {
     if (!restored.ok) throw new Error(restored.reason)
     expect(restored.value.exportSave()).toEqual(serialized)
 
-    expect(Simulation.fromSave({ ...serialized, version: 1 })).toMatchObject({ ok: false, reason: expect.stringContaining('верс') })
+    expect(Simulation.fromSave({ ...serialized, version: 4 })).toMatchObject({ ok: false, reason: expect.stringContaining('верс') })
     const legacyShape = structuredClone(serialized)
     delete legacyShape.simulation.goal
     expect(Simulation.fromSave(legacyShape)).toMatchObject({ ok: false, reason: expect.stringContaining('структур') })
