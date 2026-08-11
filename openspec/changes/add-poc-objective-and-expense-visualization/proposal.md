@@ -4,11 +4,11 @@ The laboratory now has a complete economy but no explicit PoC completion moment,
 
 ## What Changes
 
-- Add a one-time autonomous-laboratory objective gated by flight, 25 cumulative data sales, and non-negative current net income.
+- Add a one-time autonomous-laboratory objective gated by at least two fully staffed clear research modules, flight, five continuous simulation minutes of strictly positive net income, and a sticky 500-credits-per-minute net-income peak.
 - Show objective progress in the control panel and pause for an acknowledgement dialog when the objective is first achieved.
 - Keep play state intact and resume at ×1 after acknowledgement.
 - Add a top-bar stacked upkeep visualization broken down by module type and cats.
-- Replace save schema and local-storage key v1 with v2; old saves are unsupported and are not migrated.
+- Replace save schema and local-storage key v4 with v5; old saves are unsupported and are not migrated.
 
 ## Capabilities
 
@@ -19,10 +19,10 @@ The laboratory now has a complete economy but no explicit PoC completion moment,
 
 ### Modified Capabilities
 
-- `versioned-local-saves`: Persist cumulative sales and objective state in required schema v2 without v1 migration.
+- `versioned-local-saves`: Persist cumulative sales, profitable duration, maximum historical net income, and objective state in required schema v5 without v4 migration.
 
 ## Impact
 
-- Extends core snapshots and saves with cumulative sales, upkeep categories, and objective state.
+- Extends core snapshots and saves with cumulative sales, upkeep categories, profitable duration, peak-income state, and objective state.
 - Updates the main Vue interface, styling, Russian rules, core tests, and component tests.
 - Adds no runtime dependencies.

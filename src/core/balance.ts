@@ -44,7 +44,9 @@ export const GAME_BALANCE = deepFreeze({
     flightUnlockProgress: 50,
   },
   objective: {
-    dataSoldTarget: 25,
+    requiredResearchNodes: 2,
+    requiredProfitableSeconds: 300,
+    requiredPeakNetIncomePerMinute: 500,
   },
   data: {
     serverBaseCapacityPerSecond: 0.5,

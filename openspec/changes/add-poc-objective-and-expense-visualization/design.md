@@ -1,30 +1,31 @@
 ## Context
 
-Scientific progress, per-terminal sales, current revenue, and aggregate upkeep already exist in deterministic core state. Terminal deletion currently removes its local sales counter, while UI-only objective state would not survive portable saves.
+Scientific progress, current revenue, aggregate upkeep, and blocked module state already exist in the deterministic core. The earlier instantaneous objective completes too quickly and does not prove that an expanded laboratory can sustain its economy.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Keep objective evaluation and expense accounting deterministic and core-owned.
+- Require a continuous profitable operating period after the infrastructure and science prerequisites are complete.
 - Preserve completion after later economic decline or terminal demolition.
 - Interrupt only once, then retain normal sandbox play.
 
 **Non-Goals:**
-- Timed profitability requirements, multiple objectives, save migration, expense history, or one-off purchase visualization.
+- Real-time or offline timer accrual, multiple objectives, save migration, expense history, or one-off purchase visualization.
 
 ## Decisions
 
-### Persist cumulative sales and sticky objective state
+### Persist continuous progress and sticky objective state
 
-The simulation owns `totalDataSold`, `achieved`, and `acknowledged`. Objective evaluation runs after each economic tick and becomes permanently true once flight is unlocked, cumulative sales reach 25, and current revenue per minute covers upkeep. Acknowledgement is a core command so exported saves do not replay the dialog.
+The simulation owns `profitableSeconds`, historical `peakNetIncomePerMinute`, `achieved`, and `acknowledged`. Every economic tick raises the stored peak to the greater of its previous value and current net income; later declines never lower it. Timing begins only after flight unlocks, at least two research modules exist, every research module is unblocked, and both slots in every research module retain an assignment. Each positive-duration tick adds time only when revenue per minute is strictly greater than upkeep. Any failed running tick resets partial progress; `tick(0)` leaves it unchanged. Reaching 300 seconds preserves the completed timing milestone. A stored peak at or above 500 credits per minute satisfies the independent peak milestone. Overall completion requires both milestones and valid current infrastructure. Acknowledgement remains a core command so exported saves do not replay the dialog.
 
 ### Expose upkeep categories in snapshots
 
 The core calculates recurring upkeep for every module type and cats from the shared balance. The UI renders positive categories as a proportional stacked strip with textual totals and accessible labels. Construction, hiring, dismissal, and refunds remain cumulative spending only.
 
-### Start save schema v2 without migration
+### Start save schema v5 without migration
 
-The application reads only `catmand-save-v2`, exports version 2, and rejects imported version-1 files. The unused v1 local key is left untouched and a new laboratory starts when no v2 save exists.
+The application reads only `catmand-save-v5`, exports version 5, and rejects imported version-4 files. The unused v4 local key is left untouched and a new laboratory starts when no v5 save exists.
 
 ### Pause until explicit acknowledgement
 
@@ -32,6 +33,6 @@ New or restored unacknowledged completion opens a modal at speed zero. Keyboard 
 
 ## Risks / Trade-offs
 
-- Instantaneous profitability can briefly cross zero → Requiring 25 lifetime sales ensures the trade loop has already operated before completion.
+- Five minutes can feel like passive waiting → Simulation speed applies normally, so ×10 completes the timer in 30 real seconds while any economic failure still resets it.
 - A stacked strip has little space for a legend → Each colored segment exposes a category tooltip and accessible label.
-- v1 progress is lost → This is an accepted PoC constraint communicated by the existing early-development warning.
+- v4 progress is lost → This is an accepted PoC constraint communicated by the existing early-development warning.
