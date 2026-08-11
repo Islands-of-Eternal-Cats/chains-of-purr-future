@@ -6,7 +6,7 @@ import App from './App.vue'
 
 const VueFlowStub = {
   props: ['nodes', 'edges', 'isValidConnection'],
-  emits: ['connect', 'init'],
+  emits: ['connect', 'init', 'edge-click', 'node-click'],
   setup(_props: unknown, { emit }: { emit: (event: string, value: unknown) => void }) {
     onMounted(() => {
       emit('init', {
@@ -27,6 +27,7 @@ const VueFlowStub = {
         :data-blocked="String(node.data.blocked)"
         :data-x="node.position.x"
         :data-y="node.position.y"
+        @click="$emit('node-click', { node })"
       />
       <i
         v-for="edge in edges.filter((candidate) => isValidConnection(candidate))"
@@ -34,6 +35,7 @@ const VueFlowStub = {
         class="flow-edge-stub"
         :data-edge-id="edge.id"
         :data-label="edge.label"
+        @click="$emit('edge-click', { edge })"
       />
       <template v-for="node in nodes" :key="node.id + '-slots'">
         <button
@@ -100,7 +102,7 @@ describe('App economy controls', () => {
     })
 
     expect(wrapper.text()).toContain(`Торговый терминал · ${GAME_BALANCE.nodes.terminal.cost}.00`)
-    expect(wrapper.find('.app-version').text()).toBe('v2.0.0')
+    expect(wrapper.find('.app-version').text()).toBe('v2.0.1')
     expect(wrapper.find('.science-readout').text()).toContain('0.00/ 0.00')
     expect(wrapper.find('.economy-readout strong').text()).toBe('1000.00')
     expect(wrapper.find('.expense-label').text()).toBe('РАСХОДЫ / МИН')
@@ -411,6 +413,57 @@ describe('App economy controls', () => {
     const saved = JSON.parse(window.localStorage.getItem('catmand-save-v5')!)
     expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'research-1').position).toEqual({ x: 385, y: 130 })
     expect(saved.simulation.nodes.find((node: { id: string }) => node.id === 'hub-2').position).toEqual({ x: 490, y: 202 })
+  })
+
+  it('keeps module, connection, cat, and slot selections mutually exclusive', async () => {
+    const simulation = new Simulation()
+    const research = simulation.createNode('research')
+    const server = simulation.createNode('server')
+    if (!research.ok || !server.ok) throw new Error('Missing selection setup')
+    simulation.connect(research.value.id, server.value.id)
+    window.localStorage.setItem('catmand-save-v5', JSON.stringify(simulation.exportSave()))
+
+    const wrapper = mount(App, { global: { stubs: { VueFlow: VueFlowStub } } })
+    const module = wrapper.find(`[data-node-id="${research.value.id}"]`)
+    const connection = wrapper.find('.flow-edge-stub')
+    const emptySlot = wrapper.find(`.slot-${research.value.slots[0].id}`)
+    const disconnectButton = wrapper.find('.action-button--disconnect')
+    const deleteButton = wrapper.find('.action-button--danger')
+    const catButton = wrapper.find('.crew-cat-button')
+
+    await module.trigger('click')
+    expect(deleteButton.attributes()).not.toHaveProperty('disabled')
+    expect(disconnectButton.attributes()).toHaveProperty('disabled')
+
+    await connection.trigger('click')
+    expect(deleteButton.attributes()).toHaveProperty('disabled')
+    expect(disconnectButton.attributes()).not.toHaveProperty('disabled')
+
+    await emptySlot.trigger('click')
+    expect(disconnectButton.attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.graph-status').text()).toContain('Слот выбран')
+
+    await module.trigger('click')
+    expect(deleteButton.attributes()).not.toHaveProperty('disabled')
+    expect(wrapper.find('.graph-status').text()).toContain('Исследования выбран')
+
+    await catButton.trigger('click')
+    expect(deleteButton.attributes()).toHaveProperty('disabled')
+    expect(catButton.attributes('aria-pressed')).toBe('true')
+
+    await connection.trigger('click')
+    expect(catButton.attributes('aria-pressed')).toBe('false')
+    expect(disconnectButton.attributes()).not.toHaveProperty('disabled')
+
+    await module.trigger('click')
+    expect(disconnectButton.attributes()).toHaveProperty('disabled')
+    expect(deleteButton.attributes()).not.toHaveProperty('disabled')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
+    expect(deleteButton.attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.graph-status').text()).toContain('Выбор отменён')
+    wrapper.unmount()
   })
 
   it('selects a working cat first, supports Escape, and then transfers it directly to another module', async () => {

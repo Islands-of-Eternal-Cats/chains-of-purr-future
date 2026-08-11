@@ -407,8 +407,17 @@ function assignCatToWorkSlot(catId: string, nodeId: string, slotId: string) {
   return result.ok
 }
 
+function clearAllSelections() {
+  selectedCatId.value = null
+  selectedSlot.value = null
+  selectedConnection.value = null
+  selectedModuleId.value = null
+}
+
 function selectCat(catId: string) {
   const cat = catIndex.value[catId]
+  selectedConnection.value = null
+  selectedModuleId.value = null
   if (selectedSlot.value) {
     const target = selectedSlot.value
     if (assignCatToWorkSlot(catId, target.nodeId, target.slotId)) {
@@ -417,7 +426,9 @@ function selectCat(catId: string) {
     }
     return
   }
-  selectedCatId.value = selectedCatId.value === catId ? null : catId
+  const wasSelected = selectedCatId.value === catId
+  clearAllSelections()
+  selectedCatId.value = wasSelected ? null : catId
   const currentNode = snapshot.value.nodes.find((node) => node.id === cat.nodeId)
   const activeTargetNode = snapshot.value.nodes.find((node) => node.id === (cat.travel?.targetNodeId ?? cat.stranded?.targetNodeId))
   status.value = selectedCatId.value
@@ -432,6 +443,8 @@ function selectCat(catId: string) {
 }
 
 function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string | null, reservedCatId: string | null, assignedCatId: string | null) {
+  selectedConnection.value = null
+  selectedModuleId.value = null
   const targetNode = snapshot.value.nodes.find((node) => node.id === nodeId)
   const representedCatId = occupiedCatId ?? reservedCatId ?? assignedCatId
   if (representedCatId) {
@@ -484,10 +497,9 @@ function handleSlotClick(nodeId: string, slotId: string, occupiedCatId: string |
 }
 
 function cancelCatSelection(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || (!selectedCatId.value && !selectedSlot.value)) return
-  selectedCatId.value = null
-  selectedSlot.value = null
-  status.value = 'Выбор кота или слота отменён.'
+  if (event.key !== 'Escape' || (!selectedCatId.value && !selectedSlot.value && !selectedConnection.value && !selectedModuleId.value)) return
+  clearAllSelections()
+  status.value = 'Выбор отменён.'
 }
 
 function onConnect(connection: FlowConnection) {
@@ -504,8 +516,9 @@ function onConnect(connection: FlowConnection) {
 }
 
 function selectConnection(event: EdgeMouseEvent) {
-  if (selectedConnection.value?.id === event.edge.id) {
-    selectedConnection.value = null
+  const wasSelected = selectedConnection.value?.id === event.edge.id
+  clearAllSelections()
+  if (wasSelected) {
     status.value = 'Выбор связи отменён.'
     return
   }
@@ -514,13 +527,14 @@ function selectConnection(event: EdgeMouseEvent) {
 }
 
 function selectModule(event: NodeMouseEvent) {
+  const wasSelected = selectedModuleId.value === event.node.id
+  clearAllSelections()
   if (event.node.data.node.blocked) {
     status.value = `${event.node.data.node.name} перекрыт другим узлом. Переместите его, чтобы восстановить доступ.`
     return
   }
-  const isSelected = selectedModuleId.value === event.node.id
-  selectedModuleId.value = isSelected ? null : event.node.id
-  status.value = isSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
+  selectedModuleId.value = wasSelected ? null : event.node.id
+  status.value = wasSelected ? 'Выбор модуля отменён.' : `${event.node.data.node.name} выбран.`
 }
 
 function disconnectSelected() {
@@ -957,7 +971,7 @@ onBeforeUnmount(() => {
             <path class="connection-preview" :d="`M ${sourceX},${sourceY} L ${targetX},${targetY}`" />
           </template>
         </VueFlow>
-        <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot }"><span class="status-dot"></span>{{ status }}</div>
+        <div class="graph-status" :class="{ 'graph-status--selection': selectedCatId || selectedSlot || selectedConnection || selectedModuleId }"><span class="status-dot"></span>{{ status }}</div>
         <div class="canvas-caption"><span>LIVE SIMULATION</span><b>{{ formatGameNumber(simulationSpeed) }}×</b></div>
       </section>
     </section>
