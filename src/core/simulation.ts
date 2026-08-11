@@ -1,11 +1,11 @@
 import { GAME_BALANCE } from './balance'
-import type { Cat, CommandResult, Connection, GameSaveV2, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, SimulationStateV2, TravelLeg, UpkeepBreakdown, WorkerLink, WorkSlot } from './types'
+import type { Cat, CommandResult, Connection, GameSaveV5, NodeType, Point, RoadPort, SimNode, SimulationSnapshot, SimulationStateV5, TravelLeg, UpkeepBreakdown, WorkerLink, WorkSlot } from './types'
 
 const REST_ID = 'rest-1'
 const CAT_NAMES = ['Мира', 'Нокс', 'Север', 'Иней', 'Пиксель']
 const CAT_VARIANTS = ['◕', '◔', '◑', '◒', '◐']
 const EPSILON = 0.000001
-const SAVE_VERSION = 2
+const SAVE_VERSION = 5
 
 function slots(nodeId: string, amount: number): WorkSlot[] {
   return Array.from({ length: amount }, (_, index) => ({ id: `${nodeId}-slot-${index + 1}`, catId: null, reservedByCatId: null, assignedCatId: null }))
@@ -98,6 +98,8 @@ export class Simulation {
   private lastRevenuePerMinute = 0
   private goalAchieved = false
   private goalAcknowledged = false
+  private profitableSeconds = 0
+  private peakNetIncomePerMinute = 0
 
   constructor(initialize = true) {
     if (!initialize) return
@@ -129,11 +131,11 @@ export class Simulation {
         revenuePerMinute: this.lastRevenuePerMinute,
         debtWarning: this.credits <= GAME_BALANCE.economy.debtWarningThreshold,
       },
-      goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged },
+      goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged, profitableSeconds: this.profitableSeconds, peakNetIncomePerMinute: this.peakNetIncomePerMinute },
     }
   }
 
-  exportSave(): GameSaveV2 {
+  exportSave(): GameSaveV5 {
     const snapshot = this.snapshot()
     return {
       version: SAVE_VERSION,
@@ -147,7 +149,7 @@ export class Simulation {
         flightUnlocked: this.flightUnlocked,
         scienceProgress: this.scienceProgress,
         economy: { credits: this.credits, totalEarned: this.totalEarned, totalSpent: this.totalSpent, totalDataSold: this.totalDataSold },
-        goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged },
+        goal: { achieved: this.goalAchieved, acknowledged: this.goalAcknowledged, profitableSeconds: this.profitableSeconds, peakNetIncomePerMinute: this.peakNetIncomePerMinute },
       },
     }
   }
@@ -166,11 +168,14 @@ export class Simulation {
       || !isFiniteNumber(state.economy.totalEarned) || state.economy.totalEarned < 0
       || !isFiniteNumber(state.economy.totalSpent) || state.economy.totalSpent < 0
       || !isFiniteNumber(state.economy.totalDataSold) || state.economy.totalDataSold < 0
-      || !isRecord(state.goal) || typeof state.goal.achieved !== 'boolean' || typeof state.goal.acknowledged !== 'boolean') {
+      || !isRecord(state.goal) || typeof state.goal.achieved !== 'boolean' || typeof state.goal.acknowledged !== 'boolean'
+      || !isFiniteNumber(state.goal.peakNetIncomePerMinute) || state.goal.peakNetIncomePerMinute < 0
+      || !isFiniteNumber(state.goal.profitableSeconds) || state.goal.profitableSeconds < 0
+      || state.goal.profitableSeconds > GAME_BALANCE.objective.requiredProfitableSeconds + EPSILON) {
       return { ok: false, reason: 'Сохранение повреждено или имеет неверную структуру.' }
     }
     const loaded = new Simulation(false)
-    const typedState = state as unknown as SimulationStateV2
+    const typedState = state as unknown as SimulationStateV5
     if (!loaded.restoreState(typedState)) return { ok: false, reason: 'Сохранение содержит повреждённые ссылки или топологию.' }
     return { ok: true, value: loaded }
   }
@@ -598,7 +603,7 @@ export class Simulation {
     this.totalDataSold += dataSold
     this.lastRevenuePerMinute = revenue / deltaSeconds * 60
     this.unlockFlightIfReady()
-    this.unlockGoalIfReady()
+    this.updateGoalProgress(deltaSeconds)
     return { ok: true, value: undefined }
   }
 
@@ -846,7 +851,7 @@ export class Simulation {
     return this.totalUpkeep(this.upkeepBreakdown())
   }
 
-  private restoreState(state: SimulationStateV2) {
+  private restoreState(state: SimulationStateV5) {
     if (!state.nodes.some((node) => node.id === REST_ID && node.type === 'rest')) return false
     const nodeIds = new Set<string>()
     const slotIds = new Set<string>()
@@ -934,8 +939,10 @@ export class Simulation {
     if (this.totalDataSold + EPSILON < terminalSales) return false
     this.goalAchieved = state.goal.achieved
     this.goalAcknowledged = state.goal.acknowledged
+    this.profitableSeconds = state.goal.profitableSeconds
+    this.peakNetIncomePerMinute = state.goal.peakNetIncomePerMinute
     if (this.goalAcknowledged && !this.goalAchieved) return false
-    if (this.goalAchieved && (!this.flightUnlocked || this.totalDataSold + EPSILON < GAME_BALANCE.objective.dataSoldTarget)) return false
+    if (this.goalAchieved && (!this.flightUnlocked || this.peakNetIncomePerMinute + EPSILON < GAME_BALANCE.objective.requiredPeakNetIncomePerMinute || this.profitableSeconds + EPSILON < GAME_BALANCE.objective.requiredProfitableSeconds)) return false
     this.lastRevenuePerMinute = 0
     return true
   }
@@ -945,10 +952,21 @@ export class Simulation {
     this.totalSpent += amount
   }
 
-  private unlockGoalIfReady() {
-    if (this.goalAchieved || !this.flightUnlocked) return
-    if (this.totalDataSold + EPSILON < GAME_BALANCE.objective.dataSoldTarget) return
-    if (this.lastRevenuePerMinute + EPSILON < this.upkeepPerMinute()) return
+  private updateGoalProgress(deltaSeconds: number) {
+    const netIncomePerMinute = this.lastRevenuePerMinute - this.upkeepPerMinute()
+    this.peakNetIncomePerMinute = Math.max(this.peakNetIncomePerMinute, netIncomePerMinute)
+    if (this.goalAchieved) return
+    const researchNodes = [...this.nodes.values()].filter((node) => node.type === 'research')
+    const hasFullyStaffedResearch = researchNodes.length >= GAME_BALANCE.objective.requiredResearchNodes
+      && researchNodes.every((node) => !node.blocked && node.slots.every((slot) => slot.assignedCatId !== null))
+    const hasRequiredInfrastructure = hasFullyStaffedResearch && this.flightUnlocked
+    const timerComplete = this.profitableSeconds + EPSILON >= GAME_BALANCE.objective.requiredProfitableSeconds
+    if (!timerComplete) {
+      if (!hasRequiredInfrastructure || netIncomePerMinute <= EPSILON) this.profitableSeconds = 0
+      else this.profitableSeconds = Math.min(GAME_BALANCE.objective.requiredProfitableSeconds, this.profitableSeconds + deltaSeconds)
+    }
+    if (!hasRequiredInfrastructure || this.peakNetIncomePerMinute + EPSILON < GAME_BALANCE.objective.requiredPeakNetIncomePerMinute || this.profitableSeconds + EPSILON < GAME_BALANCE.objective.requiredProfitableSeconds) return
+    this.profitableSeconds = GAME_BALANCE.objective.requiredProfitableSeconds
     this.goalAchieved = true
   }
 
