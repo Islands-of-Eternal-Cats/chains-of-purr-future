@@ -814,6 +814,24 @@ describe('Simulation flight era', () => {
 })
 
 describe('Simulation cozy economy and data network', () => {
+  function objectiveCandidate(scienceProgress: number, totalDataSold: number, storedData: number) {
+    const simulation = fundedSimulation()
+    const server = simulation.createNode('server')
+    const terminal = simulation.createNode('terminal')
+    if (!server.ok || !terminal.ok) throw new Error('Missing objective nodes')
+    simulation.connect(server.value.id, terminal.value.id)
+    const save = simulation.exportSave()
+    save.simulation.flightUnlocked = scienceProgress >= GAME_BALANCE.science.flightUnlockProgress
+    save.simulation.scienceProgress = scienceProgress
+    save.simulation.nodes.find((candidate) => candidate.id === server.value.id)!.dataStored = storedData
+    save.simulation.nodes.find((candidate) => candidate.id === terminal.value.id)!.dataSold = totalDataSold
+    save.simulation.economy.totalDataSold = totalDataSold
+    save.simulation.economy.totalEarned = totalDataSold * GAME_BALANCE.economy.dataSalePrice
+    const restored = Simulation.fromSave(save)
+    if (!restored.ok) throw new Error(restored.reason)
+    return { simulation: restored.value, terminalId: terminal.value.id }
+  }
+
   it('defines balance for every node type and charges the shared configured prices', () => {
     expect(Object.keys(GAME_BALANCE.nodes).sort()).toEqual(['hub', 'research', 'rest', 'server', 'terminal'])
     const simulation = new Simulation()
@@ -824,6 +842,27 @@ describe('Simulation cozy economy and data network', () => {
     if (!terminal.ok) throw new Error(terminal.reason)
     simulation.deleteNode(terminal.value.id)
     expect(simulation.snapshot().economy.credits).toBe(before - GAME_BALANCE.nodes.terminal.cost * (1 - GAME_BALANCE.economy.demolitionRefundRatio))
+  })
+
+  it('exposes recurring upkeep by module type and crew', () => {
+    const simulation = new Simulation()
+    simulation.createNode('research')
+    simulation.createNode('server')
+    simulation.createNode('terminal')
+    simulation.createNode('hub')
+    simulation.createNode('rest')
+    simulation.hireCat()
+
+    const economy = simulation.snapshot().economy
+    expect(economy.upkeepBreakdown).toEqual({
+      rest: GAME_BALANCE.nodes.rest.upkeepPerMinute * 2,
+      research: GAME_BALANCE.nodes.research.upkeepPerMinute,
+      server: GAME_BALANCE.nodes.server.upkeepPerMinute,
+      hub: GAME_BALANCE.nodes.hub.upkeepPerMinute,
+      terminal: GAME_BALANCE.nodes.terminal.upkeepPerMinute,
+      cats: GAME_BALANCE.economy.catUpkeepPerMinute * 2,
+    })
+    expect(economy.upkeepPerMinute).toBe(Object.values(economy.upkeepBreakdown).reduce((total, value) => total + value, 0))
   })
 
   it('produces irreversible science progress and sellable data without a server', () => {
@@ -952,6 +991,52 @@ describe('Simulation cozy economy and data network', () => {
     expect(simulation.snapshot().economy.debtWarning).toBe(false)
   })
 
+  it('requires every objective condition and unlocks exactly at the configured boundary', () => {
+    const missingScience = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress - 1, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1).simulation
+    missingScience.tick(1)
+    expect(missingScience.snapshot().goal.achieved).toBe(false)
+
+    const missingSale = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.26, 1).simulation
+    missingSale.tick(1)
+    expect(missingSale.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget - 0.01)
+    expect(missingSale.snapshot().goal.achieved).toBe(false)
+
+    const missingRevenue = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget, 0).simulation
+    missingRevenue.tick(1)
+    expect(missingRevenue.snapshot().economy.revenuePerMinute).toBe(0)
+    expect(missingRevenue.snapshot().goal.achieved).toBe(false)
+
+    const ready = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1).simulation
+    expect(ready.acknowledgeGoal()).toMatchObject({ ok: false, reason: expect.stringContaining('ещё не') })
+    ready.tick(1)
+    expect(ready.snapshot()).toMatchObject({
+      flightUnlocked: true,
+      economy: {
+        totalDataSold: GAME_BALANCE.objective.dataSoldTarget,
+        revenuePerMinute: expect.any(Number),
+      },
+      goal: { achieved: true, acknowledged: false },
+    })
+    expect(ready.snapshot().economy.revenuePerMinute).toBeGreaterThanOrEqual(ready.snapshot().economy.upkeepPerMinute)
+  })
+
+  it('keeps the achieved objective and cumulative sales after demolition, acknowledgement, and save/load', () => {
+    const { simulation, terminalId } = objectiveCandidate(GAME_BALANCE.science.flightUnlockProgress, GAME_BALANCE.objective.dataSoldTarget - 0.25, 1)
+    simulation.tick(1)
+    expect(simulation.deleteNode(terminalId).ok).toBe(true)
+    simulation.tick(1)
+    expect(simulation.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget)
+    expect(simulation.snapshot().goal.achieved).toBe(true)
+    expect(simulation.acknowledgeGoal().ok).toBe(true)
+
+    const save = simulation.exportSave()
+    const restored = Simulation.fromSave(JSON.parse(JSON.stringify(save)))
+    if (!restored.ok) throw new Error(restored.reason)
+    expect(restored.value.snapshot().goal).toEqual({ achieved: true, acknowledged: true })
+    expect(restored.value.snapshot().economy.totalDataSold).toBeCloseTo(GAME_BALANCE.objective.dataSoldTarget)
+    expect(restored.value.exportSave()).toEqual(save)
+  })
+
   it('round-trips versioned saves and rejects invalid versions or references atomically', () => {
     const simulation = fundedSimulation()
     const research = simulation.createNode('research')
@@ -963,7 +1048,10 @@ describe('Simulation cozy economy and data network', () => {
     if (!restored.ok) throw new Error(restored.reason)
     expect(restored.value.exportSave()).toEqual(serialized)
 
-    expect(Simulation.fromSave({ ...serialized, version: 2 })).toMatchObject({ ok: false, reason: expect.stringContaining('верс') })
+    expect(Simulation.fromSave({ ...serialized, version: 1 })).toMatchObject({ ok: false, reason: expect.stringContaining('верс') })
+    const legacyShape = structuredClone(serialized)
+    delete legacyShape.simulation.goal
+    expect(Simulation.fromSave(legacyShape)).toMatchObject({ ok: false, reason: expect.stringContaining('структур') })
     const corrupt = structuredClone(serialized)
     corrupt.simulation.cats[0].nodeId = 'missing-node'
     expect(Simulation.fromSave(corrupt)).toMatchObject({ ok: false, reason: expect.stringContaining('ссыл') })
